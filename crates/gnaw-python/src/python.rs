@@ -2,16 +2,70 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use gnaw_adapters::{
+    FullWalkTree, HandlebarsRenderer, IdentityChunker, ItemsTree, PatternSelector, RendererConfig,
+    SecretScrubber, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
+};
+use gnaw_core::configuration::GnawConfig;
 use gnaw_core::configuration::GnawConfigBuilder;
-use gnaw_core::session::GnawSession;
+use gnaw_core::path::display_name;
+use gnaw_core::pipeline::ports::TreeBuilder;
+use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
+use gnaw_core::session::SelectionState;
 use gnaw_core::sort::FileSortMethod;
 use gnaw_core::template::OutputFormat;
 use gnaw_core::tokenizer::{TokenFormat, TokenizerType};
-
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 struct PyGnawSession {
-    inner: GnawSession,
+    inner: SelectionState,
+}
+
+/// Build and run the whole-repo extraction pipeline for `config`.
+///
+/// Python's API is whole-repo only (no --diff / git-narrative templates), so
+/// this mirrors the default arm of the CLI's `build_spec`. The duplication is
+/// deliberate and temporary: when `build_spec` moves into `gnaw-core` (REST,
+/// MCP, and now Python all need it — the second use case that justifies the
+/// move), delete this and call the shared builder. Errors are stringified at
+/// the boundary so the crate needs no anyhow/PipelineError import.
+fn run_pipeline(config: &GnawConfig) -> Result<Rendered, String> {
+    let tree_builder: Box<dyn TreeBuilder> = if config.full_directory_tree {
+        Box::new(FullWalkTree::new(config.clone()))
+    } else {
+        Box::new(ItemsTree)
+    };
+
+    let spec = PipelineSpec {
+        source: Box::new(WorkingTreeSource::new(config.clone())),
+        selector: Box::new(PatternSelector::new(
+            &config.include_patterns,
+            &config.exclude_patterns,
+        )),
+        chunker: Box::new(IdentityChunker),
+        scrubber: Box::new(SecretScrubber::new(config)),
+        ranker: Box::new(Uniform),
+        budgeter: Box::new(TakeUntilBudget::new(Box::new(TiktokenCounter::new(
+            config.encoding,
+        )))),
+        renderer: Box::new(HandlebarsRenderer::new(RendererConfig {
+            no_codeblock: config.no_codeblock,
+            line_numbers: config.line_numbers,
+            git_diff: None,
+            git_diff_branch: None,
+            git_log_branch: None,
+            template_str: config.template_str.clone(),
+            template_name: config.template_name.clone(),
+            output_format: config.output_format,
+            user_variables: config.user_variables.clone(),
+        })),
+        tree_builder,
+        budget: 0,
+        root_label: display_name(&config.path),
+        sort_method: config.sort_method,
+    };
+
+    run(&spec, &SourceOpts).map_err(|e| e.to_string())
 }
 
 #[pymethods]
@@ -29,7 +83,7 @@ impl PyGnawSession {
             })?;
 
         Ok(Self {
-            inner: GnawSession::new(config),
+            inner: SelectionState::new(config),
         })
     }
 
@@ -37,135 +91,135 @@ impl PyGnawSession {
     fn include(&mut self, patterns: Vec<String>) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.include_patterns = patterns;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn exclude(&mut self, patterns: Vec<String>) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.exclude_patterns = patterns;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn with_line_numbers(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.line_numbers = value;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn with_absolute_paths(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.absolute_path = value;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn with_full_directory_tree(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.full_directory_tree = value;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn with_code_blocks(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.no_codeblock = !value; // Invert because API is different
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn follow_symlinks(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.follow_symlinks = value;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn include_hidden(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.hidden = value;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn no_ignore(&mut self, value: bool) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.no_ignore = value;
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
@@ -183,15 +237,15 @@ impl PyGnawSession {
                 )));
             }
         }
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
@@ -209,15 +263,15 @@ impl PyGnawSession {
                 )));
             }
         }
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
@@ -236,15 +290,15 @@ impl PyGnawSession {
                 )));
             }
         }
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
@@ -260,15 +314,15 @@ impl PyGnawSession {
                 )));
             }
         }
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
@@ -281,15 +335,15 @@ impl PyGnawSession {
         } else {
             config.template_name = "custom".to_string();
         }
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
@@ -297,26 +351,27 @@ impl PyGnawSession {
     fn with_variable(&mut self, key: String, value: String) -> PyResult<Py<Self>> {
         let mut config = self.inner.config.clone();
         config.user_variables.insert(key, value);
-        self.inner = GnawSession::new(config);
+        self.inner = SelectionState::new(config);
 
         Python::attach(|py| {
-            Ok(Py::new(
+            Py::new(
                 py,
                 Self {
                     inner: self.inner.clone(),
                 },
-            )?)
+            )
         })
     }
 
     fn generate(&mut self) -> PyResult<String> {
-        match self.inner.generate_prompt() {
-            Ok(rendered) => Ok(rendered.prompt),
-            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to generate prompt: {}",
-                e
-            ))),
-        }
+        run_pipeline(&self.inner.config)
+            .map(|r| r.body)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to generate prompt: {}",
+                    e
+                ))
+            })
     }
 
     fn info(&self) -> PyResult<HashMap<String, String>> {
@@ -339,14 +394,14 @@ impl PyGnawSession {
     }
 
     fn token_count(&self) -> PyResult<usize> {
-        // Generate the prompt and count tokens
-        match self.inner.clone().generate_prompt() {
-            Ok(rendered) => Ok(rendered.token_count),
-            Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to count tokens: {}",
-                e
-            ))),
-        }
+        run_pipeline(&self.inner.config)
+            .map(|r| r.tally.total)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to count tokens: {}",
+                    e
+                ))
+            })
     }
 }
 

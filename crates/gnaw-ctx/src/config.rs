@@ -1,18 +1,18 @@
 //! Configuration parsing and session creation utilities.
 //!
 //! This module handles the conversion of command-line arguments into
-//! GnawSession instances, consolidating all configuration parsing
+//! SelectionState instances, consolidating all configuration parsing
 //! logic in one place for better maintainability and separation of concerns.
 
 use anyhow::{Context, Result};
 use gnaw_core::{
-    configuration::{GnawConfig, TomlConfig},
-    session::GnawSession,
+    builtin_templates::BuiltinTemplates,
+    configuration::{DiffMode, GnawConfig, TomlConfig},
+    session::SelectionState,
     sort::FileSortMethod,
-    template::{OutputFormat, extract_undefined_variables},
+    template::OutputFormat,
     tokenizer::TokenizerType,
 };
-use inquire::Text;
 use log::error;
 use std::path::PathBuf;
 
@@ -20,6 +20,18 @@ use crate::{args::Cli, config_loader::ConfigSource};
 use gnaw_core::configuration::CompressionOptions;
 
 const STRIP_TOKENS: [&str; 4] = ["tests", "fn-bodies", "doc-comments", "private-bodies"];
+
+/// Builtin template keys whose runs are "git narrative" — they reason about a
+/// change, so the pipeline scopes their source tree to the changed files. Lives
+/// here, in the template-selection layer, because that's the one place that
+/// already knows these keys; the pipeline reads the resolved `git_narrative`
+/// flag and never carries its own copy.
+const GIT_NARRATIVE_TEMPLATES: &[&str] = &[
+    "write-git-commit",
+    "write-git-changeset-commits",
+    "write-github-pull-request",
+];
+
 /// Unified session builder that merges configuration layering in one place
 /// - base: Some(&ConfigSource) to use loaded config as defaults; None to use CLI defaults
 /// - args: CLI arguments
@@ -28,7 +40,7 @@ pub fn build_session(
     base: Option<&ConfigSource>,
     args: &Cli,
     tui_mode: bool,
-) -> Result<GnawSession> {
+) -> Result<SelectionState> {
     let mut configuration = GnawConfig::builder();
 
     let cfg = base.map(|b| &b.config);
@@ -131,10 +143,6 @@ pub fn build_session(
         ("".to_string(), "default".to_string())
     };
 
-    configuration
-        .template_str(template_str)
-        .template_name(template_name);
-
     // Git options: CLI overrides config
     let diff_branches = parse_branch_argument(&args.git_diff_branch).or_else(|| {
         cfg.and_then(|c| {
@@ -166,6 +174,23 @@ pub fn build_session(
     let cfg_token_map_enabled = cfg.map(|c| c.token_map_enabled).unwrap_or(false);
     let cfg_deselected = cfg.map(|c| c.deselected).unwrap_or(false);
 
+    // Flag-implied template default (only when the user didn't pass --template).
+    // Mirrors the diff/branch values set on the builder below.
+    let diff_enabled_resolved = args.diff || cfg_diff_enabled;
+    let diff_mode_resolved = args.diff_mode.unwrap_or_default();
+    let (template_str, template_name, git_narrative) = resolve_flag_template_from_parts(
+        &template_str,
+        &template_name,
+        diff_branches.is_some(),
+        log_branches.is_some(),
+        diff_enabled_resolved,
+        diff_mode_resolved,
+    );
+
+    configuration
+        .template_str(template_str)
+        .template_name(template_name)
+        .git_narrative(git_narrative);
     let policy = args
         .secret_scan
         .or_else(|| cfg.and_then(|c| c.secret_scan))
@@ -203,7 +228,7 @@ pub fn build_session(
         configuration.user_variables(c.user_variables.clone());
     }
 
-    let session = GnawSession::new(configuration.build()?);
+    let session = SelectionState::new(configuration.build()?);
     Ok(session)
 }
 
@@ -280,37 +305,6 @@ pub fn parse_template(template_arg: &Option<String>) -> Result<(String, String)>
         }
         None => Ok(("".to_string(), "default".to_string())),
     }
-}
-
-/// Handles user-defined variables in the template and adds them to the session.
-///
-/// This function extracts undefined variables from the template and prompts
-/// the user to provide values for them through interactive input.
-///
-/// # Arguments
-///
-/// * `session` - The GnawSession to modify
-/// * `template_content` - The template content string to analyze
-///
-/// # Returns
-///
-/// * `Result<()>` - An empty result indicating success or an error
-pub fn handle_undefined_variables(session: &mut GnawSession, template_content: &str) -> Result<()> {
-    let undefined_variables = extract_undefined_variables(template_content);
-
-    for var in undefined_variables.iter() {
-        // Check if variable is already defined in user_variables
-        if !session.config.user_variables.contains_key(var) {
-            let prompt = format!("Enter value for '{}': ", var);
-            let answer = Text::new(&prompt)
-                .with_help_message("Fill user defined variable in template")
-                .prompt()
-                .unwrap_or_default();
-            session.config.user_variables.insert(var.clone(), answer);
-        }
-    }
-
-    Ok(())
 }
 
 /// Expands comma-separated patterns while preserving brace expansion patterns
@@ -416,4 +410,43 @@ fn levenshtein(a: &str, b: &str) -> usize {
         std::mem::swap(&mut prev, &mut curr);
     }
     prev[b.len()]
+}
+
+fn resolve_flag_template_from_parts(
+    explicit_template_str: &str,
+    explicit_template_name: &str,
+    has_diff_branches: bool,
+    has_log_branches: bool,
+    diff_enabled: bool,
+    diff_mode: DiffMode,
+) -> (String, String, bool) {
+    let user_picked = !explicit_template_str.is_empty() || explicit_template_name != "default";
+    if user_picked {
+        // Honor the explicit choice; it's git-narrative iff they named one of
+        // the narrative builtins (so `--diff --template write-git-commit` still
+        // gets the changed-files tree, same as the auto-selected case).
+        let git_narrative = GIT_NARRATIVE_TEMPLATES.contains(&explicit_template_name);
+        return (
+            explicit_template_str.to_string(),
+            explicit_template_name.to_string(),
+            git_narrative,
+        );
+    }
+
+    let key: Option<&str> = if has_diff_branches || has_log_branches {
+        Some("write-github-pull-request")
+    } else if diff_enabled {
+        match diff_mode {
+            DiffMode::Unstaged | DiffMode::All => Some("write-git-changeset-commits"),
+            DiffMode::Staged => Some("write-git-commit"),
+        }
+    } else {
+        None
+    };
+
+    match key.and_then(BuiltinTemplates::get_template) {
+        // Every key auto-select can produce is a git-narrative template.
+        Some(t) => (t.content.to_string(), key.unwrap().to_string(), true),
+        None => (String::new(), "default".to_string(), false),
+    }
 }

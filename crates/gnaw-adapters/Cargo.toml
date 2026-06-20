@@ -1,0 +1,27 @@
+[package]
+name = "gnaw-adapters"
+version = "0.1.0"
+edition = "2024"
+description = "Concrete pipeline adapters (filesystem, git, tokenizing, rendering) for gnaw."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/gitbadger-clan/gnaw.git"
+
+[features]
+default = []
+compression = ["gnaw-core/compression"]
+
+[dependencies]
+gnaw-core = { path = "../gnaw-core", version = "0.1.0" }
+anyhow = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+git2 = { workspace = true }
+ignore = { workspace = true }
+content_inspector = { workspace = true }
+rayon = { workspace = true }
+termtree = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.27"
+rstest = "0.26.1"

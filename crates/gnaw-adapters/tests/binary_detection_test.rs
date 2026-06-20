@@ -1,7 +1,7 @@
 //! Tests for binary file detection using content_inspector
 
+use gnaw_adapters::path::{Traversal, traverse_directory};
 use gnaw_core::configuration::GnawConfig;
-use gnaw_core::path::{Traversal, traverse_directory};
 use std::fs;
 use tempfile::TempDir;
 

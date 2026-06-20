@@ -1103,6 +1103,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnaw-adapters"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "content_inspector",
+ "git2",
+ "gnaw-core",
+ "ignore",
+ "log",
+ "rayon",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "termtree 1.0.0",
+]
+
+[[package]]
 name = "gnaw-core"
 version = "0.1.0"
 dependencies = [
@@ -1112,26 +1130,23 @@ dependencies = [
  "chardetng",
  "clap",
  "colored",
- "content_inspector",
  "csv",
  "derive_builder",
  "encoding_rs",
  "env_logger",
- "git2",
  "globset",
  "handlebars",
- "ignore",
  "indicatif",
  "log",
  "once_cell",
  "predicates",
- "rayon",
  "regex",
  "rstest",
  "serde",
  "serde_json",
  "tempfile",
  "termtree 1.0.0",
+ "thiserror 2.0.18",
  "tiktoken-rs",
  "toml",
  "tree-sitter",
@@ -1156,6 +1171,7 @@ dependencies = [
  "env_logger",
  "git2",
  "globset",
+ "gnaw-adapters",
  "gnaw-core",
  "handlebars",
  "ignore",
@@ -1185,6 +1201,7 @@ dependencies = [
 name = "gnaw-python"
 version = "0.1.0"
 dependencies = [
+ "gnaw-adapters",
  "gnaw-core",
  "pyo3",
  "serde_json",

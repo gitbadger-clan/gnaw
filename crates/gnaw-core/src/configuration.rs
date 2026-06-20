@@ -107,6 +107,13 @@ pub struct GnawConfig {
 
     #[builder(default)]
     pub secret_scan_allow_paths: Vec<String>,
+
+    /// True when the resolved template reasons about a *change* (commit,
+    /// changeset, PR). Computed at config-build time from the template
+    /// selection — NOT a user-set knob, NOT serialized to TOML. The pipeline
+    /// reads this to scope the source tree to changed files; it never
+    /// re-derives the intent from the template name.
+    pub git_narrative: bool,
 }
 
 impl GnawConfig {
@@ -116,7 +123,8 @@ impl GnawConfig {
 }
 
 /// What `--git-diff-shas` emits per changed file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum DiffShaContent {
     /// Patch only; full `after` body for additions. ~1x changed content.
