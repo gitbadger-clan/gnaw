@@ -15,6 +15,7 @@ use gnaw_core::configuration::GnawConfig;
 use gnaw_core::path::display_name;
 use gnaw_core::pipeline::ports::{Chunker, ContextSource, TreeBuilder};
 use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
+use std::time::Instant;
 
 /// Build the extraction spec for `config`. `--git-diff-shas` is the single axis
 /// that turns the source/chunker/tree builder; the renderer template comes from
@@ -101,8 +102,15 @@ pub fn build_spec(config: &GnawConfig) -> Result<PipelineSpec> {
 /// Build and run the extraction spec end to end. The one-call entry the CLI's
 /// non-split path uses.
 pub fn run_extraction(config: &GnawConfig) -> Result<Rendered> {
+    let started = Instant::now();
     let spec = build_spec(config)?;
     let rendered = run(&spec, &SourceOpts)?;
+    let secs = started.elapsed().as_secs_f64();
+    if secs < 1.0 {
+        eprintln!("Took {:.0}ms", secs * 1000.0);
+    } else {
+        eprintln!("Took {:.2}s", secs);
+    }
     Ok(rendered)
 }
 
