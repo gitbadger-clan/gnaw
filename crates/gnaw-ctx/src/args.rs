@@ -186,6 +186,11 @@ pub struct Cli {
     /// Overrides the config file's secret_scan_allow_paths.
     #[clap(long = "secret-scan-allow", value_name = "FRAGMENT")]
     pub secret_scan_allow: Vec<String>,
+
+    /// Print total construction time ("Took 1.23s") to stderr, and enable the
+    /// per-stage `gnaw::timing` breakdown (otherwise only via RUST_LOG).
+    #[clap(long)]
+    pub timing: bool,
 }
 
 /// Built-in template names for `--template` completion. Must be `'static`.

@@ -33,11 +33,17 @@ async fn main() -> Result<()> {
     CompleteEnv::with_factory(Cli::command)
         .bin("gnaw")
         .complete(); // first line; see prior note
-    env_logger::init();
-    info! {"Args: {:?}", std::env::args().collect::<Vec<_>>()};
 
     let args: Cli = Cli::parse();
+    // Honor RUST_LOG as before; --timing additionally turns on the per-stage
+    // breakdown so you don't need an env var to see it.
+    let mut log_builder = env_logger::Builder::from_default_env();
+    if args.timing {
+        log_builder.filter(Some("gnaw::timing"), log::LevelFilter::Debug);
+    }
+    log_builder.init();
 
+    info! {"Args: {:?}", std::env::args().collect::<Vec<_>>()};
     // ~~~ Clipboard Daemon ~~~
     #[cfg(target_os = "linux")]
     {
@@ -52,14 +58,24 @@ async fn main() -> Result<()> {
 
     // ~~~ TUI or CLI Mode ~~~
     if args.tui {
-        // ~~~ Build Session for TUI ~~~
         let session = config::build_session(None, &args, args.tui).unwrap_or_else(|e| {
             error!("Failed to create session: {}", e);
             std::process::exit(1);
         });
         run_tui(session).await
     } else {
-        run_cli_mode_with_args(args).await
+        let timing = args.timing;
+        let started = timing.then(std::time::Instant::now);
+        let res = run_cli_mode_with_args(args).await;
+        if let Some(t) = started {
+            let secs = t.elapsed().as_secs_f64();
+            if secs < 1.0 {
+                eprintln!("Took {:.0}ms", secs * 1000.0);
+            } else {
+                eprintln!("Took {:.2}s", secs);
+            }
+        }
+        res
     }
 }
 
