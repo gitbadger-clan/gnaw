@@ -75,7 +75,7 @@ project.
    ```
 3. 📦 Install the binary. To build and install from source:
    ```sh
-   cargo install --path crates/gnaw
+   cargo install --path crates/gnaw-ctx
    ```
    To build the binary without installing it:
    ```sh
@@ -91,7 +91,7 @@ project.
 
 Best for users that want to use the latest version without building from
 source. Download the latest binary for your OS from
-[Releases](https://github.com/gitbadger/gnaw/releases).
+[Releases](https://github.com/gitbadger-clan/gnaw/releases).
 
 {% aside(kind="caution") %}
 Binary releases may lag behind the latest GitHub version. For cutting-edge
@@ -106,7 +106,7 @@ To build it from source:
 1. 🛠️ Install prerequisites: [Rust](https://www.rust-lang.org/tools/install) and Cargo, [Git](https://git-scm.com/downloads), and [maturin](https://www.maturin.rs/).
 2. 📥 Clone the repository:
    ```sh
-   git clone https://github.com/gitbadger/gnaw.git
+   git clone https://github.com/gitbadger-clan/gnaw.git
    cd gnaw/crates/gnaw-python
    ```
 3. ⚙️ Build the package into your virtual environment:
