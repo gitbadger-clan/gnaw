@@ -13,6 +13,7 @@ use gnaw_core::path::wrap_code_block;
 use gnaw_core::pipeline::{PipelineError, RenderContext, Rendered, Renderer, Selection};
 use gnaw_core::template::{OutputFormat, handlebars_setup, render_template};
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Everything the renderer needs that isn't in `Selection`. Constructed by
@@ -39,11 +40,17 @@ pub struct RendererConfig {
 /// One file as the legacy templates expect it. Mirrors the fields
 /// `default_template_md.hbs` / `_xml.hbs` read off each `files` entry.
 /// Deliberately NOT `FileEntry` — we only supply what the templates touch.
+///
+/// `code` is a `Cow` so the common no-line-numbers path BORROWS each chunk's
+/// text straight out of `Selection` instead of cloning a codebase-sized buffer
+/// just to hand it to handlebars. Line-numbered output is the only case that
+/// owns (it has to rewrite). `'a` ties the borrow to the `&Selection` passed
+/// into `render`; `files` is local to that call, so the borrow never escapes.
 #[derive(Serialize)]
-struct RenderFile {
+struct RenderFile<'a> {
     path: String,
     extension: String,
-    code: String,
+    code: Cow<'a, str>,
 }
 
 /// Top-level render context. Flattens user variables the way the legacy
@@ -53,7 +60,7 @@ struct RenderFile {
 struct RenderContextHbs<'a> {
     absolute_code_path: &'a str,
     source_tree: &'a str,
-    files: Vec<RenderFile>,
+    files: Vec<RenderFile<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     git_diff: &'a Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,6 +112,8 @@ impl Renderer for HandlebarsRenderer {
         // Map chunks → the files array. Line numbers are applied HERE because
         // the source no longer wraps; fences stay the template's job via
         // no_codeblock. This is the presentation ownership option 3 buys.
+        // `wrap_code_block` returns a `Cow` — `Borrowed` when there are no line
+        // numbers (the hot path, no allocation), `Owned` when it rewrites.
         let files: Vec<RenderFile> = sel
             .chunks
             .iter()

@@ -352,7 +352,7 @@ fn process_single_file(
         Some(FileEntry {
             path: file_path,
             extension: extension.to_string(),
-            code: code_block,
+            code: code_block.into_owned(),
             token_count,
             metadata: EntryMetadata::from(metadata),
             mod_time,

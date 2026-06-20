@@ -4,6 +4,7 @@
 
 use crate::sort::{FileSortMethod, sort_tree};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::path::Path;
 use termtree::Tree;
 
@@ -51,14 +52,16 @@ pub fn display_name<P: AsRef<Path>>(p: P) -> String {
 
 /// Optionally prefix each line with a line number. Pure; the renderer owns
 /// this presentation step now that the source no longer wraps.
-pub fn wrap_code_block(code: &str, line_numbers: bool) -> String {
+pub fn wrap_code_block(code: &str, line_numbers: bool) -> std::borrow::Cow<'_, str> {
     if line_numbers {
-        code.lines()
-            .enumerate()
-            .map(|(i, line)| format!("{:4} | {}\n", i + 1, line))
-            .collect()
+        Cow::Owned(
+            code.lines()
+                .enumerate()
+                .map(|(i, l)| format!("{:4} | {}\n", i + 1, l))
+                .collect(),
+        )
     } else {
-        code.to_string()
+        Cow::Borrowed(code)
     }
 }
 
