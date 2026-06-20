@@ -10,7 +10,7 @@
 //! changed files that unit is a pre-formatted block. The changed-files
 //! template just iterates these blocks.
 
-use crate::pipeline::{Chunk, Chunker, RawContent, RawItem};
+use gnaw_core::pipeline::{Chunk, Chunker, RawContent, RawItem};
 use std::fmt::Write;
 
 pub struct ChangedChunker;

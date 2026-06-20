@@ -1,9 +1,10 @@
-//! Step 2: concrete adapters wrapping existing behavior. Each delegates to a
-//! function that already works — adapting, not rewriting. Identity/no-op
-//! impls for chunk/select/rank/budget; the trait having an impl is the win,
-//! a clever impl is a separate feature.
+//! Concrete pipeline adapters for gnaw: filesystem traversal, git, tokenizing,
+//! rendering, and the staged pipeline impls. `gnaw-core` defines the ports
+//! (traits) and DTOs; this crate provides the I/O-bound implementations,
+//! keeping core free of git2/ignore/content_inspector/rayon.
 
-//! Step 2: concrete adapters wrapping existing behavior.
+pub mod git;
+pub mod path;
 
 mod budgeter;
 mod changed_chunker;

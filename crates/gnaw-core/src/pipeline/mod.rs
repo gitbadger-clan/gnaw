@@ -12,7 +12,6 @@
 
 use serde::{Deserialize, Serialize};
 
-pub mod adapters;
 pub mod dto;
 pub mod ports;
 pub mod runner;

@@ -6,7 +6,7 @@
 //! spec is fully owned with no lifetimes, and the tally is computed HERE,
 //! once, from exactly what's kept — no parallel sum to drift from.
 
-use crate::pipeline::{Budgeter, Chunk, ScoredChunk, Selection, TokenCounter, TokenTally};
+use gnaw_core::pipeline::{Budgeter, Chunk, ScoredChunk, Selection, TokenCounter, TokenTally};
 use std::collections::BTreeMap;
 
 pub struct TakeUntilBudget {

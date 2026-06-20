@@ -2,13 +2,13 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use gnaw_core::configuration::GnawConfig;
-use gnaw_core::configuration::GnawConfigBuilder;
-use gnaw_core::path::display_name;
-use gnaw_core::pipeline::adapters::{
+use gnaw_adapters::{
     FullWalkTree, HandlebarsRenderer, IdentityChunker, ItemsTree, PatternSelector, RendererConfig,
     SecretScrubber, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
 };
+use gnaw_core::configuration::GnawConfig;
+use gnaw_core::configuration::GnawConfigBuilder;
+use gnaw_core::path::display_name;
 use gnaw_core::pipeline::ports::TreeBuilder;
 use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
 use gnaw_core::session::SelectionState;

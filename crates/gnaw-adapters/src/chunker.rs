@@ -4,7 +4,7 @@
 //! one seam where the diff-vs-file distinction is handled, so no downstream
 //! stage has to know about it.
 
-use crate::pipeline::{Chunk, Chunker, RawContent, RawItem};
+use gnaw_core::pipeline::{Chunk, Chunker, RawContent, RawItem};
 
 pub struct IdentityChunker;
 

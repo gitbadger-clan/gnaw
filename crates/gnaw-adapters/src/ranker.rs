@@ -2,7 +2,7 @@
 //! No-op ranker: every chunk scores equal, so the budgeter sees source order.
 //! A relevance/embedding ranker is a separate, later feature.
 
-use crate::pipeline::{Chunk, RankCtx, Ranker};
+use gnaw_core::pipeline::{Chunk, RankCtx, Ranker};
 
 pub struct Uniform;
 

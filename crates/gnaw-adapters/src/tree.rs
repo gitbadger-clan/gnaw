@@ -3,15 +3,21 @@
 //! where the tree must include paths the filter dropped — intrinsically a walk,
 //! not an items projection.
 
-use crate::configuration::GnawConfig;
-use crate::path::{traverse_directory, tree_from_items};
-use crate::pipeline::{RawItem, TreeBuilder};
-use crate::sort::FileSortMethod;
+use crate::path::traverse_directory;
+use gnaw_core::configuration::GnawConfig;
+use gnaw_core::path::tree_from_items;
+use gnaw_core::pipeline::{RawItem, TreeBuilder};
+use gnaw_core::sort::FileSortMethod;
 
 pub struct ItemsTree;
 
 impl TreeBuilder for ItemsTree {
-    fn build(&self, items: &[RawItem], root_label: &str, sort_method: Option<FileSortMethod>) -> String {
+    fn build(
+        &self,
+        items: &[RawItem],
+        root_label: &str,
+        sort_method: Option<FileSortMethod>,
+    ) -> String {
         tree_from_items(items, root_label, sort_method)
     }
 }
@@ -31,7 +37,12 @@ impl FullWalkTree {
 }
 
 impl TreeBuilder for FullWalkTree {
-    fn build(&self, _items: &[RawItem], _root_label: &str, _sort_method: Option<FileSortMethod>) -> String {
+    fn build(
+        &self,
+        _items: &[RawItem],
+        _root_label: &str,
+        _sort_method: Option<FileSortMethod>,
+    ) -> String {
         // traverse_directory already roots the tree at display_name and sorts
         // per config.sort_method, so root_label/sort_method args are redundant
         // here — they're part of the trait for the items builder's sake.

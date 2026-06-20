@@ -1,7 +1,7 @@
-use gnaw_core::configuration::{DiffMode, DiffShaContent};
-use gnaw_core::git::{
+use gnaw_adapters::git::{
     get_changed_files_with_contents, get_git_diff, get_git_diff_between_branches, get_git_log,
 };
+use gnaw_core::configuration::{DiffMode, DiffShaContent};
 
 #[cfg(test)]
 mod tests {
