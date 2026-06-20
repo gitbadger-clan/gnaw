@@ -60,7 +60,7 @@ This copies a prompt to your clipboard. You can customize this:
 
 - **Filtering:** `gnaw my_project --include="*.rs" --exclude="tests/*"` (includes only `.rs` files, excludes `tests` directory)
 - **Output File:** `gnaw my_project --output-file=my_prompt.txt`
-- **JSON Output:** `gnaw my_project -O json` (structured JSON output)
+- **JSON Output:** `gnaw my_project -F json` (structured JSON output; `-F` chooses the format, `-O` chooses the destination)
 - **Custom Templates:** `gnaw my_project -t my_template.hbs` (requires creating `my_template.hbs`)
 
 See the [Learn Context Filtering](/tutorials/learn-filtering/) and
@@ -69,20 +69,23 @@ more advanced usages.
 
 ## 🐍 Python Integration
 
-For programmatic control, use the Python bindings:
+For programmatic control, use the Python bindings. The API is a fluent builder:
+construct a session over a path, chain configuration calls, then `generate()`.
 
 ```python
-from gnaw import Gnaw
+from gnaw import PyGnawSession
 
-config = {
-    "path": "my_project",
-    "include_patterns": ["*.rs"],
-    "exclude_patterns": ["tests/*"],
-}
-
-g = Gnaw(**config)
-prompt = g.generate_prompt()
+prompt = (
+    PyGnawSession("my_project")
+    .include(["*.rs"])
+    .exclude(["tests/*"])
+    .generate()
+)
 print(prompt)
+
+# Token count without rendering the full prompt:
+tokens = PyGnawSession("my_project").include(["*.rs"]).token_count()
+print(tokens)
 ```
 
 {% aside(kind="caution") %}
