@@ -34,6 +34,7 @@ the bare command name `gnaw`, and you should re-source after upgrading.
 | `--token-format` | `raw`, `format` |
 | `--sort` | `name_asc`, `name_desc`, `date_asc`, `date_desc` |
 | `--diff-mode` | `staged`, `unstaged`, `all` |
+| `--git-diff-shas-content` | `patch`, `after-patch`, `full`, `full-patch` |
 | `-t`, `--template` | built-in template names (with descriptions) + file paths |
 | `--compress-strip` | `tests`, `fn-bodies`, `doc-comments`, `private-bodies` and `no-` forms |
 | path arg, `-O` | native file/path completion |
