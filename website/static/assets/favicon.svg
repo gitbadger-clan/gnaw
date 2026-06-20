@@ -1,0 +1,14 @@
+<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="gnaw">
+  <defs>
+    <linearGradient id="ember" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FF9A4D"/><stop offset="0.55" stop-color="#FF6B2C"/><stop offset="1" stop-color="#E23C0A"/>
+    </linearGradient>
+    <clipPath id="head"><path d="M120 128 L189.4 97.1 A76 76 0 1 0 189.4 158.9 Z"/></clipPath>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#ember)"/>
+  <g clip-path="url(#head)">
+    <path d="M120 128 L189.4 97.1 A76 76 0 1 0 189.4 158.9 Z" fill="#FFF3E3"/>
+    <path d="M122 56 L148 140" fill="none" stroke="#2A1A10" stroke-width="32" stroke-linecap="round"/>
+  </g>
+  <circle cx="135" cy="97" r="8.5" fill="#FFF3E3"/>
+</svg>
