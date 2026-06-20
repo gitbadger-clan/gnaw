@@ -2,8 +2,8 @@
 //! happens in the new architecture; counts raw chunk text, so the tally
 //! measures code, not formatting.
 
-use crate::pipeline::TokenCounter;
-use crate::tokenizer::{TokenizerType, count_tokens};
+use gnaw_core::pipeline::TokenCounter;
+use gnaw_core::tokenizer::{TokenizerType, count_tokens};
 
 pub struct TiktokenCounter {
     encoding: TokenizerType,

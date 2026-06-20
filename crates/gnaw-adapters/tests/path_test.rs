@@ -4,9 +4,10 @@
 //! Uses rstest for parameterized testing and fixtures for test environment setup.
 
 use git2::Repository;
+use gnaw_adapters::path::{Traversal, traverse_directory};
 use gnaw_core::{
     configuration::GnawConfig,
-    path::{EntryMetadata, FileEntry, Traversal, traverse_directory},
+    path::{EntryMetadata, FileEntry},
 };
 use rstest::*;
 use std::{

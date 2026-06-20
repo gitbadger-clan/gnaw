@@ -6,9 +6,9 @@
 //! (it yields genuinely raw content, as its name claims). `Off` is a fast
 //! passthrough so the no-scan path costs nothing.
 
-use crate::configuration::GnawConfig;
-use crate::pipeline::{FindingDto, RawContent, RawItem, Scrubber};
-use crate::secret_scan::{SCANNER, SecretPolicy, SecretScanner};
+use gnaw_core::configuration::GnawConfig;
+use gnaw_core::pipeline::{FindingDto, RawContent, RawItem, Scrubber};
+use gnaw_core::secret_scan::{SCANNER, SecretPolicy, SecretScanner};
 
 pub struct SecretScrubber {
     policy: SecretPolicy,

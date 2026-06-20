@@ -1,14 +1,14 @@
 //! The two launch sources. "Working-tree files" and "files changed between
 //! two refs" are genuinely different sources, not one source plus a filter.
 
-use crate::configuration::DiffMode;
-use crate::configuration::GnawConfig;
 use crate::git::{
     get_branch_changed_paths, get_changed_files_with_contents, get_working_tree_changed_paths,
 };
 use crate::path::{RawFile, extract_raw_file};
-use crate::pipeline::{ContextSource, PipelineError, RawContent, RawItem, SourceOpts};
-use crate::secret_scan::Finding;
+use gnaw_core::configuration::DiffMode;
+use gnaw_core::configuration::GnawConfig;
+use gnaw_core::pipeline::{ContextSource, PipelineError, RawContent, RawItem, SourceOpts};
+use gnaw_core::secret_scan::Finding;
 use ignore::WalkBuilder;
 use std::path::PathBuf;
 

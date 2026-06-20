@@ -10,10 +10,11 @@ readme = "../../README.md"
 [features]
 default = ["compression"]   # see the recommendation below
 wayland = ["arboard/wayland-data-control"]
-compression = ["gnaw-core/compression"]
+compression = ["gnaw-adapters/compression"]
 
 [dependencies]
 gnaw-core = { path = "../gnaw-core", version = "0.1.0", features = ["clap"] }
+gnaw-adapters = { path = "../gnaw-adapters", version = "0.1.0" }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 env_logger = { workspace = true }

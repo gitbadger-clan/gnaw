@@ -1,8 +1,8 @@
 //! This module handles git operations.
 
-use crate::configuration::{DiffMode, DiffShaContent};
 use anyhow::{Context, Result};
 use git2::{Delta, DiffOptions, Oid, Patch, Repository};
+use gnaw_core::configuration::{DiffMode, DiffShaContent};
 use log::debug;
 use serde::Serialize;
 use std::path::Path;

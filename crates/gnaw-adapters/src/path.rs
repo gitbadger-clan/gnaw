@@ -1,36 +1,22 @@
 //! This module contains the functions for traversing the directory and processing the files.
-use crate::configuration::GnawConfig;
-use crate::file_processor;
-use crate::filter::{build_globset, should_include_file};
-use crate::secret_scan::{Finding, SCANNER, SecretPolicy, SecretScanner};
-use crate::sort::{FileSortMethod, sort_files, sort_tree};
-use crate::tokenizer::count_tokens;
-use crate::util::strip_utf8_bom;
 use anyhow::Result;
 use content_inspector::{ContentType, inspect};
+use gnaw_core::configuration::GnawConfig;
+use gnaw_core::file_processor;
+use gnaw_core::filter::{build_globset, should_include_file};
+use gnaw_core::path::{EntryMetadata, FileEntry, display_name, wrap_code_block};
+use gnaw_core::secret_scan::{Finding, SCANNER, SecretPolicy, SecretScanner};
+use gnaw_core::sort::{FileSortMethod, sort_files, sort_tree};
+use gnaw_core::tokenizer::count_tokens;
+use gnaw_core::util::strip_utf8_bom;
 use ignore::WalkBuilder;
 use log::debug;
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use termtree::Tree;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct EntryMetadata {
-    pub is_dir: bool,
-    pub is_symlink: bool,
-}
-
-impl From<&std::fs::Metadata> for EntryMetadata {
-    fn from(meta: &std::fs::Metadata) -> Self {
-        Self {
-            is_dir: meta.is_dir(),
-            is_symlink: meta.is_symlink(),
-        }
-    }
-}
 pub type SecretFinding = (String, Finding);
 pub struct Traversal {
     pub tree: String,
@@ -50,17 +36,6 @@ pub struct RawFile {
     /// (path, finding) pairs. TEMPORARY home — step 2.5's Scrubber stage
     /// takes ownership of findings and this field goes away.
     pub findings: Vec<(String, Finding)>,
-}
-/// Represents a file entry with all its metadata and content
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileEntry {
-    pub path: String,
-    pub extension: String,
-    pub code: String,
-    pub token_count: usize,
-    pub metadata: EntryMetadata,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mod_time: Option<u64>,
 }
 
 /// Represents a file that needs to be processed
@@ -90,7 +65,7 @@ struct FileToProcess {
 ///   tree and a vector of file entries
 pub fn traverse_directory(
     config: &GnawConfig,
-    selection_engine: Option<&mut crate::selection::SelectionEngine>,
+    selection_engine: Option<&mut gnaw_core::selection::SelectionEngine>,
 ) -> Result<Traversal> {
     // Phase 1: Discovery - Build tree and collect files to process
     let (tree, files_to_process) = discover_files(config, selection_engine)?;
@@ -115,7 +90,7 @@ pub fn traverse_directory(
 /// - Selection engine has caching that would need synchronization
 fn discover_files(
     config: &GnawConfig,
-    mut selection_engine: Option<&mut crate::selection::SelectionEngine>,
+    mut selection_engine: Option<&mut gnaw_core::selection::SelectionEngine>,
 ) -> Result<(Tree<String>, Vec<FileToProcess>)> {
     let canonical_root_path = config.path.canonicalize()?;
     let parent_directory = display_name(&canonical_root_path);
@@ -312,7 +287,7 @@ fn process_single_file(
     // languages with no grammar.
     #[cfg(feature = "compression")]
     let code = if config.compression.any() {
-        match crate::compressor::compressor_for_extension(extension) {
+        match gnaw_core::compressor::compressor_for_extension(extension) {
             Some(c) => c.compress(&code, &config.compression),
             None => code,
         }
@@ -459,7 +434,7 @@ pub fn extract_raw_file(
 
     #[cfg(feature = "compression")]
     let code = if config.compression.any() {
-        match crate::compressor::compressor_for_extension(extension) {
+        match gnaw_core::compressor::compressor_for_extension(extension) {
             Some(c) => c.compress(&code, &config.compression),
             None => code,
         }
@@ -513,52 +488,6 @@ fn assemble_results(
     Ok((tree.to_string(), files.to_owned()))
 }
 
-/// Returns the file name or the string representation of the path.
-///
-/// # Arguments
-///
-/// * `p` - The path to label.
-///
-/// # Returns
-///
-/// * `String` - The file name or string representation of the path.
-pub fn display_name<P: AsRef<Path>>(p: P) -> String {
-    let path = p.as_ref();
-    // File name if available
-    if let Some(name) = path.file_name() {
-        return name.to_string_lossy().into_owned();
-    }
-    // Current directory name
-    if let Ok(cwd) = std::env::current_dir()
-        && let Some(name) = cwd.file_name()
-    {
-        return name.to_string_lossy().into_owned();
-    }
-    // Fallback
-    ".".to_string()
-}
-
-/// Adds line numbers to a code block if required.
-///
-/// # Arguments
-///
-/// * `code` - The code to process.
-/// * `line_numbers` - Whether to add line numbers.
-///
-/// # Returns
-///
-/// * `String` - The processed code.
-pub fn wrap_code_block(code: &str, line_numbers: bool) -> String {
-    if line_numbers {
-        code.lines()
-            .enumerate()
-            .map(|(i, line)| format!("{:4} | {}\n", i + 1, line))
-            .collect()
-    } else {
-        code.to_string()
-    }
-}
-
 /// Build the source-tree string from already-yielded pipeline items, with no
 /// filesystem walk. This is the items-derived tree: it contains exactly the
 /// files that survived the source/filter, so it can never list a file the
@@ -569,7 +498,7 @@ pub fn wrap_code_block(code: &str, line_numbers: bool) -> String {
 /// the same `sort_tree` the legacy path uses, so a given `sort_method`
 /// produces byte-identical ordering to `traverse_directory`.
 pub fn tree_from_items(
-    items: &[crate::pipeline::RawItem],
+    items: &[gnaw_core::pipeline::RawItem],
     root_label: &str,
     sort_method: Option<FileSortMethod>,
 ) -> String {

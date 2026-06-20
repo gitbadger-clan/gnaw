@@ -4,15 +4,15 @@
 //! `pipeline` feature until it matches the golden.
 
 use anyhow::Result;
-use gnaw_core::builtin_templates::BuiltinTemplates;
-use gnaw_core::configuration::GnawConfig;
-use gnaw_core::git::{get_git_diff, get_git_diff_between_branches, get_git_log};
-use gnaw_core::path::display_name;
-use gnaw_core::pipeline::adapters::{
+use gnaw_adapters::git::{get_git_diff, get_git_diff_between_branches, get_git_log};
+use gnaw_adapters::{
     ChangedChunker, ChangedPathsSource, ChangedScope, CommitRangeSource, FullWalkTree,
     HandlebarsRenderer, IdentityChunker, ItemsTree, PatternSelector, RendererConfig,
     SecretScrubber, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
 };
+use gnaw_core::builtin_templates::BuiltinTemplates;
+use gnaw_core::configuration::GnawConfig;
+use gnaw_core::path::display_name;
 use gnaw_core::pipeline::ports::{Chunker, ContextSource, TreeBuilder};
 use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
 

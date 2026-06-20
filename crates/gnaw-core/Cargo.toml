@@ -25,14 +25,11 @@ clap = ["dep:clap"]
 anyhow = { workspace = true }
 bracoxide = { workspace = true }
 colored = { workspace = true }
-content_inspector = { workspace = true }
 clap = { workspace = true, optional = true, features = ["std", "derive"] }
 csv = { workspace = true }
 derive_builder = { workspace = true }
 encoding_rs = { workspace = true }
-ignore = { workspace = true }
 indicatif = { workspace = true }
-git2 = { workspace = true }
 globset = { workspace = true }
 handlebars = { workspace = true }
 log = { workspace = true }
@@ -44,7 +41,6 @@ termtree = { workspace = true }
 thiserror = { workspace = true }
 tiktoken-rs = { workspace = true }
 toml = { workspace = true }
-rayon = { workspace = true }
 chardetng = { workspace = true }
 tree-sitter = { workspace = true, optional = true }
 tree-sitter-rust = { workspace = true, optional = true }

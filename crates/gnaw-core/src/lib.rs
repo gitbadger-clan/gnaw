@@ -5,7 +5,6 @@ pub mod compressor;
 pub mod configuration;
 pub mod file_processor;
 pub mod filter;
-pub mod git;
 pub mod path;
 pub mod pipeline;
 pub mod secret_scan;

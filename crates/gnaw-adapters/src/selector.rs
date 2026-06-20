@@ -1,8 +1,8 @@
 //! Pass-through selector: keeps everything. Real include/exclude/size/
 //! secret-scan predicate logic lands when the runner needs it; step 2 just
 //! needs the trait to have an impl so a spec can name a selector slot.
-use crate::filter::FilterEngine;
-use crate::pipeline::{RawItem, Selector};
+use gnaw_core::filter::FilterEngine;
+use gnaw_core::pipeline::{RawItem, Selector};
 use std::collections::HashSet;
 use std::path::Path;
 

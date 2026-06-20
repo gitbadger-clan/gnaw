@@ -9,9 +9,9 @@
 //! byte without changing the templates. This is option-3 from the step-2
 //! renderer decision: legacy templates fed from the new pipeline shape.
 
-use crate::path::wrap_code_block;
-use crate::pipeline::{PipelineError, RenderContext, Rendered, Renderer, Selection};
-use crate::template::{OutputFormat, handlebars_setup, render_template};
+use gnaw_core::path::wrap_code_block;
+use gnaw_core::pipeline::{PipelineError, RenderContext, Rendered, Renderer, Selection};
+use gnaw_core::template::{OutputFormat, handlebars_setup, render_template};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -78,12 +78,14 @@ impl HandlebarsRenderer {
     /// empty configured body falls back to the format's built-in default.
     fn resolve_template(&self) -> (String, String) {
         if self.cfg.template_str.is_empty() {
-            let body = match self.cfg.output_format {
-                OutputFormat::Markdown => include_str!("../../default_template_md.hbs").to_string(),
-                OutputFormat::Xml | OutputFormat::Json => {
-                    include_str!("../../default_template_xml.hbs").to_string()
-                }
+            let key = match self.cfg.output_format {
+                OutputFormat::Markdown => "default-markdown",
+                OutputFormat::Xml | OutputFormat::Json => "default-xml",
             };
+            let body = gnaw_core::builtin_templates::BuiltinTemplates::get_template(key)
+                .expect("builtin default template missing")
+                .content
+                .to_string();
             let name = match self.cfg.output_format {
                 OutputFormat::Markdown => "markdown".to_string(),
                 OutputFormat::Xml | OutputFormat::Json => "xml".to_string(),

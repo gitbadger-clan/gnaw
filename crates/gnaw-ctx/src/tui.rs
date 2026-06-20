@@ -31,7 +31,7 @@ use crate::widgets::{
     FileSelectionWidget, OutputWidget, SettingsWidget, StatisticsByExtensionWidget,
     StatisticsOverviewWidget, StatisticsTokenMapWidget, TemplateWidget,
 };
-use gnaw_core::pipeline::adapters::ExplicitSelector;
+use gnaw_adapters::ExplicitSelector;
 use gnaw_core::pipeline::{SourceOpts, run};
 
 use crate::utils::build_file_tree_from_session;
@@ -625,7 +625,7 @@ impl TuiApp {
                 let config = self.model.session.config.clone();
                 tokio::task::spawn_blocking(move || {
                     for path in paths {
-                        let tokens = gnaw_core::path::count_file_tokens(&path, &config);
+                        let tokens = gnaw_adapters::path::count_file_tokens(&path, &config);
                         let _ = tx.send(Message::TokenCounted { path, tokens });
                     }
                 });
