@@ -5,6 +5,12 @@
 //! This is where the secret scan lives now; `extract_raw_file` no longer scans
 //! (it yields genuinely raw content, as its name claims). `Off` is a fast
 //! passthrough so the no-scan path costs nothing.
+//!
+//! Only `Redact` rewrites content. `Warn` and `Block` scan for findings but
+//! leave the bytes untouched, so they MUST NOT clone the file body — scanning
+//! takes `&str` and the original text is moved straight back. Cloning here
+//! (the old behavior) duplicated the whole codebase on every default run,
+//! since `warn` is the default policy.
 
 use gnaw_core::configuration::GnawConfig;
 use gnaw_core::pipeline::{FindingDto, RawContent, RawItem, Scrubber};
@@ -23,15 +29,22 @@ impl SecretScrubber {
         }
     }
 
-    /// Scrub one text field, appending findings tagged with `path`. Returns the
-    /// (possibly redacted) text. For non-Redact policies the text is unchanged;
-    /// findings are still collected.
-    fn scrub_field(&self, path: &str, text: &str, out: &mut Vec<FindingDto>) -> String {
-        let (scrubbed, found) = SCANNER.scrub(text, self.policy);
-        for f in &found {
-            out.push(FindingDto::from_core(path.to_string(), f));
+    /// Scan `text`, appending findings tagged with `path`. Returns `Some(rewritten)`
+    /// ONLY when the policy redacts; `None` means "keep the original" — the hot path
+    /// for the default `warn`, where we must not clone the file body.
+    fn scan_field(&self, path: &str, text: &str, out: &mut Vec<FindingDto>) -> Option<String> {
+        if self.policy == SecretPolicy::Redact {
+            let (scrubbed, found) = SCANNER.scrub(text, SecretPolicy::Redact);
+            for f in &found {
+                out.push(FindingDto::from_core(path.to_string(), f));
+            }
+            Some(scrubbed)
+        } else {
+            for f in &SCANNER.scan(text) {
+                out.push(FindingDto::from_core(path.to_string(), f));
+            }
+            None
         }
-        scrubbed
     }
 }
 
@@ -55,21 +68,23 @@ impl Scrubber for SecretScrubber {
 
                 let content = match item.content {
                     RawContent::Text { text } => {
-                        let scrubbed = self.scrub_field(&item.path, &text, &mut findings);
-                        RawContent::Text { text: scrubbed }
+                        match self.scan_field(&item.path, &text, &mut findings) {
+                            Some(scrubbed) => RawContent::Text { text: scrubbed },
+                            None => RawContent::Text { text }, // moved back — no clone
+                        }
                     }
                     RawContent::Changed {
                         after,
                         before,
                         patch,
                     } => {
-                        // Scrub every populated field — a secret can live in the
-                        // added lines (after/patch +), removed lines (before/patch -),
-                        // or both. Missing a field would leave a hole.
-                        let after = self.scrub_field(&item.path, &after, &mut findings);
-                        let before =
-                            before.map(|b| self.scrub_field(&item.path, &b, &mut findings));
-                        let patch = patch.map(|p| self.scrub_field(&item.path, &p, &mut findings));
+                        let after = self
+                            .scan_field(&item.path, &after, &mut findings)
+                            .unwrap_or(after);
+                        let before = before
+                            .map(|b| self.scan_field(&item.path, &b, &mut findings).unwrap_or(b));
+                        let patch = patch
+                            .map(|p| self.scan_field(&item.path, &p, &mut findings).unwrap_or(p));
                         RawContent::Changed {
                             after,
                             before,
