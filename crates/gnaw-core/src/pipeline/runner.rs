@@ -82,10 +82,13 @@ pub fn run(spec: &PipelineSpec, opts: &SourceOpts) -> Result<Rendered, PipelineE
 
     // Render — now takes the items-derived context as a second argument.
     let rendered = spec.renderer.render(&selection, &render_ctx)?;
+
     Ok(Rendered {
         findings,
-        chunks: selection.chunks.clone(),
-        source_tree: render_ctx.source_tree.clone(),
+        chunks: selection.chunks,
+        // Moved, not cloned — `render_ctx` is dead after `render` borrowed it,
+        // and this string is codebase-tree-sized. Completes hotspot #2.
+        source_tree: render_ctx.source_tree,
         ..rendered
     })
 }
