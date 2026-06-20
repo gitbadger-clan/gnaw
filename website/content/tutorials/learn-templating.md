@@ -24,13 +24,17 @@ codebase structure and user-defined variables.
 ## How to use Handlebars Templates
 
 You can use these templates by passing the `-t` or `--template` flag followed
-by the path to the template file. For example:
+by a built-in template name or the path to a custom template file. For example:
 
 {% code(title="sh") %}
 ```sh
-gnaw path/to/codebase -t templates/document-the-code.hbs
+gnaw path/to/codebase -t document-the-code
+gnaw path/to/codebase -t templates/my-template.hbs
 ```
 {% end %}
+
+A built-in name is matched first; anything else is treated as a path to a
+custom `.hbs` file on disk.
 
 ## Template Syntax
 
@@ -42,7 +46,9 @@ can use in your templates:
 - `absolute_code_path`: The absolute path to the codebase.
 - `source_tree`: The source tree of the codebase, which includes all files and directories.
 - `files`: A list of files in the codebase, including their paths and contents.
-- `git_diff`: The git diff of the codebase, if applicable.
+- `git_diff`: The working-tree git diff, if `--diff` was passed.
+- `git_diff_branch`: The diff between two branches, if `--git-diff-branch` was passed.
+- `git_log_branch`: The commit log between two branches, if `--git-log-branch` was passed.
 - `code`: The code content of the file being processed.
 - `path`: The path of the file being processed.
 
@@ -66,17 +72,28 @@ other operations within your templates. For example:
 
 `gnaw` comes with a set of built-in templates for common use cases. You can
 find them in the
-[`templates`](https://github.com/gitbadger/gnaw/tree/main/crates/gnaw-core/templates)
-directory: `document-the-code`, `find-security-vulnerabilities`,
-`clean-up-code`, `fix-bugs`, `write-github-pull-request`,
-`write-github-readme`, `write-git-commit`, and `improve-performance`.
+[`templates`](https://github.com/gitbadger-clan/gnaw/tree/main/crates/gnaw-core/templates)
+directory. Pass any of these names to `-t` / `--template`:
+
+**Model-specific layouts:** `claude-xml`, `chatgpt-markdown`, `gemini`.
+
+**Code tasks:** `document-the-code`, `find-security-vulnerabilities`,
+`clean-up-code`, `fix-bugs`, `refactor`, `improve-performance`,
+`write-github-readme`.
+
+**Git narratives:** `write-git-commit`, `write-git-changeset-commits`,
+`write-github-pull-request`. These reason about a *change*, so they pair with
+the git flags — see [Git diffs and logs](/reference/git-context/).
+
+**CTF solvers:** `binary-exploitation-ctf-solver`, `cryptography-ctf-solver`,
+`reverse-engineering-ctf-solver`, `web-ctf-solver`.
 
 ## User Defined Variables
 
 `gnaw` supports the use of user defined variables in the Handlebars templates.
 Any variables in the template that are not part of the default context
-(`absolute_code_path`, `source_tree`, `files`) will be treated as user defined
-variables.
+(`absolute_code_path`, `source_tree`, `files`, and the per-file fields exposed
+inside `{{#each files}}`) will be treated as user defined variables.
 
 During prompt generation, `gnaw` will prompt the user to enter values for these
 user defined variables. This allows for further customization of the generated
@@ -88,6 +105,6 @@ variables when running `gnaw`.
 
 {% aside(kind="tip") %}
 You can avoid runtime prompting entirely by predefining values in the
-`[user_variables]` section of your `.c2pconfig` — see
+`[user_variables]` section of your `.gnawconfig` — see
 [Configuration](/tutorials/configuration/).
 {% end %}
