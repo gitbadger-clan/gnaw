@@ -3,6 +3,7 @@
 //! This module contains the state and logic for the template editor component,
 //! including TextArea management, validation, and content synchronization.
 
+use anyhow::{Result, anyhow};
 use ratatui_textarea::TextArea;
 use regex::Regex;
 use std::collections::HashSet;
@@ -120,16 +121,16 @@ impl EditorState {
     }
 
     /// Attempt to compile the template to check for syntax errors
-    fn compile_template(&self) -> Result<(), String> {
+    fn compile_template(&self) -> Result<()> {
         let mut handlebars = handlebars::Handlebars::new();
+        // Allow undefined variables for now; we only want to catch syntax errors.
+        handlebars.set_strict_mode(false);
 
-        // Set strict mode to catch undefined variables
-        handlebars.set_strict_mode(false); // Allow undefined variables for now
+        handlebars
+            .register_template_string("test", &self.content)
+            .map_err(|e| anyhow!("Failed to compile template: {}", e))?;
 
-        match handlebars.register_template_string("test", &self.content) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("{}", e)),
-        }
+        Ok(())
     }
 
     /// Get current template content
