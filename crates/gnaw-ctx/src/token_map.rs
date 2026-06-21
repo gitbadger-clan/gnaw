@@ -783,3 +783,225 @@ fn generate_hierarchical_bar(
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Terse constructor — inputs are always leaf files; the engine rebuilds
+    /// the directory structure from the '/'-separated path.
+    fn mf(path: &str, tokens: usize) -> TokenMapFile {
+        TokenMapFile {
+            path: path.to_string(),
+            tokens,
+        }
+    }
+
+    #[test]
+    fn builds_simple_tree_with_dir_aggregate() {
+        let files = vec![mf("src/main.rs", 100), mf("src/lib.rs", 200)];
+        let entries = generate_token_map_with_limit(&files, 300, Some(100), Some(0.0));
+
+        let src = entries.iter().find(|e| e.name == "src").expect("src dir");
+        assert_eq!(src.tokens, 300, "src should aggregate its children");
+        assert!(src.metadata.is_dir, "src is a synthesized directory node");
+
+        let main = entries
+            .iter()
+            .find(|e| e.name == "main.rs")
+            .expect("main.rs");
+        assert!(!main.metadata.is_dir, "leaf files are not directories");
+    }
+
+    #[test]
+    fn directories_accumulate_child_tokens() {
+        // The key property of the single-pass insert: a directory's token count
+        // is the sum of everything beneath it, including grandchildren.
+        let files = vec![
+            mf("src/a.rs", 100),
+            mf("src/b.rs", 200),
+            mf("src/sub/c.rs", 50),
+        ];
+        let entries = generate_token_map_with_limit(&files, 350, Some(100), Some(0.0));
+
+        let src = entries.iter().find(|e| e.name == "src").expect("src");
+        assert_eq!(src.tokens, 350, "src = 100 + 200 + 50");
+
+        let sub = entries.iter().find(|e| e.name == "sub").expect("sub");
+        assert_eq!(sub.tokens, 50, "sub holds only its own child");
+    }
+
+    #[test]
+    fn nested_structure_increases_depth() {
+        let files = vec![
+            mf("website/public/assets/logo.svg", 100),
+            mf("website/public/favicon.ico", 50),
+        ];
+        let entries = generate_token_map_with_limit(&files, 150, Some(100), Some(0.0));
+
+        let depth = |name: &str| {
+            entries
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.depth)
+                .unwrap_or_else(|| panic!("missing entry: {name}"))
+        };
+
+        let website = depth("website");
+        let public = depth("public");
+        let assets = depth("assets");
+        let logo = depth("logo.svg");
+        let favicon = depth("favicon.ico");
+
+        // Root is depth 0 and never emitted, so the first visible level is
+        // depth 1 (gnaw differs from upstream's 0-based depths here). Assert the
+        // relationships rather than exact numbers so this stays robust.
+        assert!(
+            website < public && public < assets && assets < logo,
+            "depth must strictly increase down the chain: {website} {public} {assets} {logo}"
+        );
+        // favicon.ico sits directly under public — same level as assets.
+        assert_eq!(favicon, assets, "favicon.ico is a sibling level of assets");
+    }
+
+    #[test]
+    fn max_lines_limits_displayed_files() {
+        let files = vec![
+            mf("a.rs", 1000),
+            mf("b.rs", 500),
+            mf("c.rs", 200),
+            mf("d.rs", 100),
+        ];
+        let entries = generate_token_map_with_limit(&files, 1800, Some(2), Some(0.0));
+
+        // The heaviest file is always kept (highest priority in the heap).
+        assert!(
+            entries.iter().any(|e| e.name == "a.rs"),
+            "a.rs must survive"
+        );
+
+        // With a tight budget the rest collapse into "(other files)"; count only
+        // non-directory rows (real files + the aggregate).
+        let file_rows = entries.iter().filter(|e| !e.metadata.is_dir).count();
+        assert!(
+            file_rows <= 3,
+            "expected at most 3 file rows, got {file_rows}"
+        );
+    }
+
+    #[test]
+    fn min_percent_filters_small_files() {
+        // 10% of 950 = 95; small.rs (50) falls below the floor and is dropped.
+        let files = vec![mf("big.rs", 900), mf("small.rs", 50)];
+        let entries = generate_token_map_with_limit(&files, 950, Some(100), Some(10.0));
+
+        assert!(entries.iter().any(|e| e.name == "big.rs"), "big.rs kept");
+        assert!(
+            entries.iter().all(|e| e.name != "small.rs"),
+            "small.rs filtered by min_percent"
+        );
+    }
+
+    #[test]
+    fn hidden_tokens_become_other_files() {
+        // Same setup as the min_percent test, but assert the remainder is
+        // accounted for rather than silently dropped.
+        let files = vec![mf("big.rs", 900), mf("small.rs", 50)];
+        let entries = generate_token_map_with_limit(&files, 950, Some(100), Some(10.0));
+
+        let other = entries
+            .iter()
+            .find(|e| e.name == "(other files)")
+            .expect("filtered tokens should surface as (other files)");
+        assert_eq!(other.tokens, 50, "the dropped 50 tokens are aggregated");
+    }
+
+    #[test]
+    fn no_other_files_when_everything_shown() {
+        // Everything fits: no remainder, so no aggregate row.
+        let files = vec![mf("a.rs", 100), mf("b.rs", 200)];
+        let entries = generate_token_map_with_limit(&files, 300, Some(100), Some(0.0));
+        assert!(
+            entries.iter().all(|e| e.name != "(other files)"),
+            "nothing hidden ⇒ no (other files) row"
+        );
+    }
+
+    #[test]
+    fn single_file_is_one_leaf() {
+        let entries = generate_token_map_with_limit(&[mf("a.rs", 100)], 100, Some(100), Some(0.0));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "a.rs");
+        assert_eq!(entries[0].tokens, 100);
+        assert!(!entries[0].metadata.is_dir);
+    }
+
+    #[test]
+    fn empty_input_yields_no_entries() {
+        let entries = generate_token_map_with_limit(&[], 0, Some(100), Some(0.0));
+        assert!(
+            entries.is_empty(),
+            "no files ⇒ no entries (and no divide-by-zero)"
+        );
+    }
+
+    #[test]
+    fn realistic_multi_crate_layout() {
+        let files = vec![
+            mf("crates/gnaw/src/main.rs", 5000),
+            mf("crates/gnaw/src/args.rs", 3000),
+            mf("crates/gnaw-core/src/analysis.rs", 2000),
+            mf("website/src/index.html", 1000),
+            mf("website/public/favicon.ico", 500),
+            mf("README.md", 200),
+        ];
+        let total: usize = files.iter().map(|f| f.tokens).sum();
+        let entries = generate_token_map_with_limit(&files, total, Some(50), Some(0.0));
+
+        assert!(!entries.is_empty(), "should produce a tree");
+        assert!(
+            entries.iter().any(|e| e.name == "crates"),
+            "top-level 'crates' directory present"
+        );
+        assert!(
+            entries.iter().any(|e| e.depth >= 3),
+            "deep nesting (crates/<pkg>/src/<file>) should reach depth >= 3"
+        );
+    }
+
+    #[test]
+    fn entries_are_valid_preorder() {
+        // Structural invariant: walking the flat list, depth never *increases*
+        // by more than one step at a time (a child is exactly parent.depth + 1;
+        // uncles and the trailing "(other files)" only ever step back down).
+        let files = vec![mf("a/b/c/d.rs", 100), mf("a/b/e.rs", 200), mf("f.rs", 50)];
+        let entries = generate_token_map_with_limit(&files, 350, Some(100), Some(0.0));
+
+        for w in entries.windows(2) {
+            assert!(
+                w[1].depth <= w[0].depth + 1,
+                "depth jumped from {} to {} — not a valid pre-order walk",
+                w[0].depth,
+                w[1].depth
+            );
+        }
+    }
+
+    #[test]
+    fn percentages_match_token_share() {
+        let files = vec![mf("a.rs", 250), mf("b.rs", 750)];
+        let total = 1000;
+        let entries = generate_token_map_with_limit(&files, total, Some(100), Some(0.0));
+
+        for e in &entries {
+            let expected = e.tokens as f64 / total as f64 * 100.0;
+            assert!(
+                (e.percentage - expected).abs() < 1e-6,
+                "{}: percentage {} != {}",
+                e.name,
+                e.percentage,
+                expected
+            );
+        }
+    }
+}
