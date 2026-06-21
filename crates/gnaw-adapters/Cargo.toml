@@ -1,6 +1,6 @@
 [package]
 name = "gnaw-adapters"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Concrete pipeline adapters (filesystem, git, tokenizing, rendering) for gnaw."
 license = "MIT OR Apache-2.0"
