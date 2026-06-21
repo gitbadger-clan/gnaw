@@ -8,12 +8,27 @@ members = [
 ]
 default-members = ["crates/gnaw-core", "crates/gnaw-adapters", "crates/gnaw-ctx"]
 
+# Shared package metadata — every crate inherits via `<field>.workspace = true`.
+# Bump the version here and the whole workspace moves in lockstep.
+[workspace.package]
+version = "0.1.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/gitbadger-clan/gnaw.git"
+authors = ["gitbadger <me@gitbadger.com>"]
+
 [profile.release]
 lto = "thin"
 panic = 'abort'
 codegen-units = 1
 
 [workspace.dependencies]
+# Internal crates: version requirement lives ONCE here, so consumers can never
+# skew from the published version. Keep these two in step with the version above.
+gnaw-core = { path = "crates/gnaw-core", version = "0.1.1" }
+gnaw-adapters = { path = "crates/gnaw-adapters", version = "0.1.1" }
+
+# External dependencies
 anyhow = "1.0.102"
 ansi_term = "0.12.1"
 arboard = { version = "3.6.1" }

@@ -1,20 +1,25 @@
 [package]
 name = "gnaw-ctx"
-version = "0.1.1"
-edition = "2024"
-description = "Command-line interface for gnaw"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/gitbadger-clan/gnaw.git"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line and TUI tool that turns a codebase into an LLM-ready prompt (installs the `gnaw` binary)."
+keywords = ["cli", "tui", "llm", "prompt", "gnaw"]
+categories = ["command-line-utilities", "development-tools"]
+homepage = "https://gnaw.gitbadger.com"
+documentation = "https://gnaw.gitbadger.com/tutorials/getting-started/"
 readme = "../../README.md"
 
 [features]
-default = ["compression"]   # see the recommendation below
+default = ["compression"]
 wayland = ["arboard/wayland-data-control"]
 compression = ["gnaw-adapters/compression"]
 
 [dependencies]
-gnaw-core = { path = "../gnaw-core", version = "0.1.0", features = ["clap"] }
-gnaw-adapters = { path = "../gnaw-adapters", version = "0.1.0" }
+gnaw-core = { workspace = true, features = ["clap"] }
+gnaw-adapters = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 env_logger = { workspace = true }

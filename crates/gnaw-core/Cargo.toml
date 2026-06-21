@@ -1,20 +1,17 @@
 [package]
 name = "gnaw-core"
-version = "0.1.1"
-authors = [
-    "gitbadger <me@gitbadger.com>",
-]
-description = "A command-line (CLI) tool to generate an LLM prompt from codebases of any size, fast."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for gnaw: code-ingestion primitives, wire DTOs, and the staged prompt-assembly pipeline."
 keywords = ["code", "ingestion", "prompt", "llm", "agent"]
-categories = ["command-line-utilities", "development-tools"]
+categories = ["development-tools", "command-line-utilities"]
 homepage = "https://gnaw.gitbadger.com"
-documentation = "https://gnaw.gitbadger.com/docs/welcome"
-repository = "https://github.com/gitbadger-clan/gnaw.git"
-license = "MIT OR Apache-2.0"
+documentation = "https://gnaw.gitbadger.com/tutorials/getting-started/"
 exclude = [".github/*", ".assets/*"]
-edition = "2024"
 readme = "../../README.md"
-
 
 [features]
 default = []
@@ -49,10 +46,6 @@ tree-sitter-rust = { workspace = true, optional = true }
 name = "gnaw_core"
 path = "src/lib.rs"
 crate-type = ["rlib"]
-
-[package.metadata.deb]
-section = "utility"
-assets = [["target/release/gnaw-core", "/usr/bin/", "755"]]
 
 [dev-dependencies]
 tempfile = "3.27"

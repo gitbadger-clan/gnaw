@@ -1,17 +1,21 @@
 [package]
 name = "gnaw-adapters"
-version = "0.1.1"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Concrete pipeline adapters (filesystem, git, tokenizing, rendering) for gnaw."
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/gitbadger-clan/gnaw.git"
+keywords = ["code", "ingestion", "prompt", "llm", "gnaw"]
+categories = ["development-tools"]
+readme = "../../README.md"
 
 [features]
 default = []
 compression = ["gnaw-core/compression"]
 
 [dependencies]
-gnaw-core = { path = "../gnaw-core", version = "0.1.0" }
+gnaw-core = { workspace = true }
 anyhow = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
