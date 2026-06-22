@@ -7,13 +7,13 @@ use anyhow::Result;
 use gnaw_adapters::git::{get_git_diff, get_git_diff_between_branches, get_git_log};
 use gnaw_adapters::{
     ChangedChunker, ChangedPathsSource, ChangedScope, CommitRangeSource, FullWalkTree,
-    HandlebarsRenderer, IdentityChunker, ItemsTree, PatternSelector, RendererConfig,
-    SecretScrubber, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
+    HandlebarsRenderer, IdentityChunker, ItemsTree, PassThrough, PatternSelector, RendererConfig,
+    SecretScrubber, StdinPathsSource, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
 };
 use gnaw_core::builtin_templates::BuiltinTemplates;
 use gnaw_core::configuration::GnawConfig;
 use gnaw_core::path::display_name;
-use gnaw_core::pipeline::ports::{Chunker, ContextSource, TreeBuilder};
+use gnaw_core::pipeline::ports::{Chunker, ContextSource, Selector, TreeBuilder};
 use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
 
 /// Build the extraction spec for `config`. `--git-diff-shas` is the single axis
@@ -21,6 +21,11 @@ use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
 /// the same axis via `renderer_config_for`. This replaces the old pair of
 /// near-identical `run_*` builders — the source is now chosen from config, not
 /// by which function the caller reached for.
+///
+/// `stdin_paths == Some` → piped-paths view: `StdinPathsSource` sources exactly
+/// the files named on stdin (no walk), paired with a `PassThrough` selector
+/// since the piped list is itself the selection. Takes precedence over the git
+/// axes — if you piped a path list, that's what you meant to extract.
 ///
 /// `diff_shas == Some` → changed-files view: `CommitRangeSource` (no working-tree
 /// walk — the whole reason the token bug dies), `ChangedChunker` (per-file
@@ -32,11 +37,18 @@ use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
 /// filesystem walk under `--full-directory-tree`, which must show filter-dropped
 /// paths and so cannot derive from items.
 pub fn build_spec(config: &GnawConfig) -> Result<PipelineSpec> {
-    // Shared across both variants.
-    let selector = Box::new(PatternSelector::new(
-        &config.include_patterns,
-        &config.exclude_patterns,
-    ));
+    // The piped path list is authoritative — it bypasses include/exclude
+    // filtering (the user named exactly these files). `extract_raw_file` still
+    // drops binaries/empties and the Scrubber stage still guards secrets, so
+    // PassThrough here is no leakier than the pattern path.
+    let selector: Box<dyn Selector> = if config.stdin_paths.is_some() {
+        Box::new(PassThrough)
+    } else {
+        Box::new(PatternSelector::new(
+            &config.include_patterns,
+            &config.exclude_patterns,
+        ))
+    };
     let scrubber = Box::new(SecretScrubber::new(config));
     let ranker = Box::new(Uniform);
     let budgeter = Box::new(TakeUntilBudget::new(Box::new(TiktokenCounter::new(
@@ -53,7 +65,15 @@ pub fn build_spec(config: &GnawConfig) -> Result<PipelineSpec> {
         Box<dyn ContextSource>,
         Box<dyn Chunker>,
         Box<dyn TreeBuilder>,
-    ) = if let Some((ref1, ref2)) = config.diff_shas.clone() {
+    ) = if let Some(paths) = config.stdin_paths.clone() {
+        // stdin paths: source exactly the piped files; items-derived tree of
+        // just those files. No working-tree walk.
+        (
+            Box::new(StdinPathsSource::new(config.clone(), paths)),
+            Box::new(IdentityChunker),
+            Box::new(ItemsTree),
+        )
+    } else if let Some((ref1, ref2)) = config.diff_shas.clone() {
         // --git-diff-shas: per-file patch content, rendered inline.
         (
             Box::new(CommitRangeSource::new(config.clone(), ref1, ref2)),

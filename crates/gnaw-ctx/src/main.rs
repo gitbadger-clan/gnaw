@@ -19,13 +19,13 @@ use crate::prompt::RenderedPrompt;
 use crate::utils::format_number;
 use anyhow::{Context, Result};
 use args::Cli;
-use clap::{CommandFactory, Parser};
+use clap::{CommandFactory, FromArgMatches};
 use clap_complete::CompleteEnv;
 use colored::*;
 use gnaw_core::template::write_to_file;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use tui::run_tui;
 
 #[tokio::main]
@@ -34,7 +34,13 @@ async fn main() -> Result<()> {
         .bin("gnaw")
         .complete(); // first line; see prior note
 
-    let args: Cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let args = Cli::from_arg_matches(&matches)?;
+
+    let path_explicit =
+        matches.value_source("path") == Some(clap::parser::ValueSource::CommandLine);
+    let stdin_is_pipe = !std::io::stdin().is_terminal();
+    let use_stdin = stdin_is_pipe && !path_explicit && !args.tui && !args.clipboard_daemon;
     // Honor RUST_LOG as before; --timing additionally turns on the per-stage
     // breakdown so you don't need an env var to see it.
     let mut log_builder = env_logger::Builder::from_default_env();
@@ -56,6 +62,36 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Bare `gnaw`, interactive terminal, no args → show help. We removed
+    // arg_required_else_help so an arg-less *piped* invocation reads stdin
+    // instead of printing help. This runs AFTER the clipboard-daemon block so
+    // it never steals the daemon's stdin.
+    if !path_explicit && !stdin_is_pipe && std::env::args().len() == 1 {
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
+    }
+
+    // Slurp the piped path list once, here at the frontend edge, so the source
+    // adapter stays pure and testable with an in-memory Vec. Blank lines are
+    // dropped; paths are resolved against the config root inside the source.
+    let stdin_paths: Option<Vec<String>> = if use_stdin {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading paths from stdin")?;
+        Some(
+            buf.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(),
+        )
+    } else {
+        None
+    };
+
     // ~~~ TUI or CLI Mode ~~~
     if args.tui {
         let session = config::build_session(None, &args, args.tui).unwrap_or_else(|e| {
@@ -66,7 +102,7 @@ async fn main() -> Result<()> {
     } else {
         let timing = args.timing;
         let started = timing.then(std::time::Instant::now);
-        let res = run_cli_mode_with_args(args).await;
+        let res = run_cli_mode_with_args(args, stdin_paths).await;
         if let Some(t) = started {
             let secs = t.elapsed().as_secs_f64();
             if secs < 1.0 {
@@ -80,7 +116,7 @@ async fn main() -> Result<()> {
 }
 
 /// Run the CLI mode with parsed arguments
-async fn run_cli_mode_with_args(args: Cli) -> Result<()> {
+async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> Result<()> {
     use config_loader::{get_default_output_destination, load_config};
     use gnaw_core::configuration::OutputDestination;
 
@@ -90,12 +126,11 @@ async fn run_cli_mode_with_args(args: Cli) -> Result<()> {
     let config_source = load_config(quiet_mode)?; // load config files first (local > global), then apply CLI args on top
 
     // ~~~ Build Session with config + CLI args ~~~
-    // `mut` is required by the legacy gather/split path (default build), which
-    // mutates the session in place. Under --features pipeline that path is gated
-    // out and nothing mutates `session`, so the mut is unused there — allow it
-    // rather than drop it, since dropping breaks the default build. Both the
-    // legacy path and its mut die at Step 6.
-    let session = config::build_session(Some(&config_source), &args, false)?;
+    // `mut` so we can attach the stdin path list onto the config below; the
+    // pipeline's source selection reads `config.stdin_paths` to decide whether
+    // to source the piped files instead of walking the tree.
+    let mut session = config::build_session(Some(&config_source), &args, false)?;
+    session.config.stdin_paths = stdin_paths;
 
     // ~~~ Determine Output Behavior ~~~
     let default_output = get_default_output_destination(&config_source);

@@ -17,13 +17,17 @@ use gnaw_core::{
 use std::path::PathBuf;
 
 // ~~~ CLI Arguments ~~~
+// NOTE: `arg_required_else_help` is intentionally NOT set. A bare, arg-less
+// `gnaw` may be a piped invocation (`git diff --name-only | gnaw`) that should
+// read paths from stdin, so we can't let clap short-circuit to the help screen.
+// `main()` handles "bare gnaw at an interactive terminal → print help" manually,
+// gated on stdin being a TTY.
 #[derive(Parser, Debug)]
 #[clap(
     name = "gnaw",
     version = env!("CARGO_PKG_VERSION"),
     author = env!("CARGO_PKG_AUTHORS")
 )]
-#[command(arg_required_else_help = true)]
 pub struct Cli {
     /// Path to the codebase directory
     #[arg(value_name = "PATH_TO_ANALYZE", default_value = ".", value_hint = ValueHint::AnyPath)]
