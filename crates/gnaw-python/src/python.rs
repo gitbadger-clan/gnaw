@@ -2,71 +2,16 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use gnaw_adapters::{
-    FullWalkTree, HandlebarsRenderer, IdentityChunker, ItemsTree, PatternSelector, RendererConfig,
-    SecretScrubber, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
-};
-use gnaw_core::configuration::GnawConfig;
 use gnaw_core::configuration::GnawConfigBuilder;
-use gnaw_core::path::display_name;
-use gnaw_core::pipeline::ports::TreeBuilder;
-use gnaw_core::pipeline::{PipelineSpec, Rendered, SourceOpts, run};
 use gnaw_core::session::SelectionState;
 use gnaw_core::sort::FileSortMethod;
 use gnaw_core::template::OutputFormat;
 use gnaw_core::tokenizer::{TokenFormat, TokenizerType};
+
 #[pyclass(from_py_object)]
 #[derive(Clone)]
 struct PyGnawSession {
     inner: SelectionState,
-}
-
-/// Build and run the whole-repo extraction pipeline for `config`.
-///
-/// Python's API is whole-repo only (no --diff / git-narrative templates), so
-/// this mirrors the default arm of the CLI's `build_spec`. The duplication is
-/// deliberate and temporary: when `build_spec` moves into `gnaw-core` (REST,
-/// MCP, and now Python all need it — the second use case that justifies the
-/// move), delete this and call the shared builder. Errors are stringified at
-/// the boundary so the crate needs no anyhow/PipelineError import.
-fn run_pipeline(config: &GnawConfig) -> Result<Rendered, String> {
-    let tree_builder: Box<dyn TreeBuilder> = if config.full_directory_tree {
-        Box::new(FullWalkTree::new(config.clone()))
-    } else {
-        Box::new(ItemsTree)
-    };
-
-    let spec = PipelineSpec {
-        source: Box::new(WorkingTreeSource::new(config.clone())),
-        selector: Box::new(PatternSelector::new(
-            &config.include_patterns,
-            &config.exclude_patterns,
-        )),
-        chunker: Box::new(IdentityChunker),
-        scrubber: Box::new(SecretScrubber::new(config)),
-        ranker: Box::new(Uniform),
-        budgeter: Box::new(TakeUntilBudget::new(Box::new(TiktokenCounter::new(
-            config.encoding,
-        )))),
-        renderer: Box::new(HandlebarsRenderer::new(RendererConfig {
-            no_codeblock: config.no_codeblock,
-            line_numbers: config.line_numbers,
-            git_diff: None,
-            git_diff_branch: None,
-            git_log_branch: None,
-            template_str: config.template_str.clone(),
-            template_name: config.template_name.clone(),
-            output_format: config.output_format,
-            user_variables: config.user_variables.clone(),
-        })),
-        tree_builder,
-        budget: 0,
-        root_label: display_name(&config.path),
-        sort_method: config.sort_method,
-        progress: None,
-    };
-
-    run(&spec, &SourceOpts).map_err(|e| e.to_string())
 }
 
 #[pymethods]
@@ -365,7 +310,7 @@ impl PyGnawSession {
     }
 
     fn generate(&mut self) -> PyResult<String> {
-        run_pipeline(&self.inner.config)
+        gnaw_pipeline::run_extraction(&self.inner.config)
             .map(|r| r.body)
             .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
@@ -395,7 +340,7 @@ impl PyGnawSession {
     }
 
     fn token_count(&self) -> PyResult<usize> {
-        run_pipeline(&self.inner.config)
+        gnaw_pipeline::run_extraction(&self.inner.config)
             .map(|r| r.tally.total)
             .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
