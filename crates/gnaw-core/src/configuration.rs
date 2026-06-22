@@ -19,6 +19,13 @@ pub struct GnawConfig {
     /// Path to the root directory of the codebase.
     pub path: PathBuf,
 
+    /// Repo-relative paths piped on stdin (`… | gnaw`). When `Some`, the
+    /// pipeline sources exactly these files instead of walking the tree.
+    /// Runtime-only: set by the frontend, never read from or written to TOML.
+    /// (The struct-level `#[builder(default)]` makes this default to `None`,
+    /// so no builder call site needs to set it.)
+    pub stdin_paths: Option<Vec<String>>,
+
     /// List of glob-like patterns to include.
     pub include_patterns: Vec<String>,
 

@@ -223,3 +223,74 @@ impl ContextSource for ChangedPathsSource {
         Ok(items)
     }
 }
+
+/// Sources exactly the files named on stdin (one repo-relative path per line),
+/// resolved against the config root. The piped list IS the selection — no
+/// gitignore walk, no pattern filtering (use a PassThrough selector). Binaries
+/// and empties are still dropped by `extract_raw_file`, and the secret Scrubber
+/// stage still runs downstream, so this is no leakier than the working-tree path.
+pub struct StdinPathsSource {
+    config: GnawConfig,
+    paths: Vec<String>,
+    /// TEMPORARY (2.5): findings home, same as WorkingTreeSource.
+    findings: std::sync::Mutex<Vec<(String, Finding)>>,
+}
+
+impl StdinPathsSource {
+    pub fn new(config: GnawConfig, paths: Vec<String>) -> Self {
+        Self {
+            config,
+            paths,
+            findings: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn take_findings(&self) -> Vec<(String, Finding)> {
+        std::mem::take(&mut self.findings.lock().unwrap())
+    }
+}
+
+impl ContextSource for StdinPathsSource {
+    fn items(&self, _opts: &SourceOpts) -> Result<Vec<RawItem>, PipelineError> {
+        let root = self
+            .config
+            .path
+            .canonicalize()
+            .map_err(|e| PipelineError::Source(format!("canonicalize root: {e}")))?;
+
+        let mut items = Vec::new();
+        let mut all_findings = Vec::new();
+
+        for raw in &self.paths {
+            // Resolve against root, then re-confine: a piped "../../etc/passwd"
+            // canonicalizes outside root and is dropped by strip_prefix.
+            let Ok(abs) = root.join(raw).canonicalize() else {
+                continue;
+            };
+            let Ok(rel) = abs.strip_prefix(&root) else {
+                continue;
+            };
+
+            if let Some(RawFile {
+                path: p,
+                extension: ext,
+                code,
+                findings,
+            }) = extract_raw_file(&abs, rel, &self.config)
+            {
+                all_findings.extend(findings);
+                items.push(RawItem {
+                    path: p,
+                    extension: ext,
+                    content: RawContent::Text { text: code },
+                    status: None,
+                    old_path: None,
+                });
+            }
+        }
+
+        items.sort_by(|a, b| a.path.cmp(&b.path)); // determinism, like the others
+        *self.findings.lock().unwrap() = all_findings;
+        Ok(items)
+    }
+}
