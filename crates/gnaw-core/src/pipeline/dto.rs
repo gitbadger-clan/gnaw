@@ -147,3 +147,16 @@ impl FindingDto {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub enum Stage {
+    Source,
+    Filter,
+    Scrub,
+    Tree,
+    Chunk,
+    Rank,
+    Count,
+    Render,
+    Done,
+}

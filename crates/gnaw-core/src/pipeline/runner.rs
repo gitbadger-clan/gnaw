@@ -16,6 +16,13 @@ use super::*;
 use crate::pipeline::dto::{Selection, TokenTally};
 use std::time::Instant;
 
+macro_rules! report {
+    ($spec:expr, $stage:expr) => {
+        if let Some(p) = &$spec.progress {
+            p($stage);
+        }
+    };
+}
 /// Declares which adapter fills each pipeline slot. Trait objects so a
 /// frontend composes a spec at runtime (CLI picks a source from flags; a REST
 /// handler picks one from a request body). Boxed because sizes differ and the
@@ -36,6 +43,9 @@ pub struct PipelineSpec {
     pub sort_method: Option<crate::sort::FileSortMethod>,
     pub tree_builder: Box<dyn TreeBuilder>,
     pub scrubber: Box<dyn Scrubber>,
+    /// Optional progress sink. Framework-free: a plain Fn, so core stays
+    /// independent of tokio/the channel. None = silent (CLI/server default).
+    pub progress: Option<Box<dyn Fn(Stage) + Send + Sync>>,
 }
 
 /// Run the pipeline end to end.
@@ -45,6 +55,7 @@ pub fn run(spec: &PipelineSpec, opts: &SourceOpts) -> Result<Rendered, PipelineE
 
     // Source: yield raw items.
     let items = spec.source.items(opts)?;
+    report!(spec, Stage::Source);
     log::debug!(target: "gnaw::timing", "source:       {:>9.2?}  ({} items)", t.elapsed(), items.len());
     t = Instant::now();
 
@@ -53,12 +64,14 @@ pub fn run(spec: &PipelineSpec, opts: &SourceOpts) -> Result<Rendered, PipelineE
         .into_iter()
         .filter(|it| spec.selector.keep(it))
         .collect();
+    report!(spec, Stage::Filter);
     log::debug!(target: "gnaw::timing", "filter:       {:>9.2?}  ({} kept)", t.elapsed(), items.len());
     t = Instant::now();
 
     // Scrub: scan for secrets BEFORE chunking (whole-file scan, matching
     // legacy). Findings ride to the end independent of budgeting.
     let (items, findings) = spec.scrubber.scrub(items);
+    report!(spec, Stage::Scrub);
     log::debug!(target: "gnaw::timing", "scrub:        {:>9.2?}  ({} findings)", t.elapsed(), findings.len());
     t = Instant::now();
 
@@ -72,11 +85,13 @@ pub fn run(spec: &PipelineSpec, opts: &SourceOpts) -> Result<Rendered, PipelineE
             .build(&items, &spec.root_label, spec.sort_method),
         absolute_code_path: spec.root_label.clone(),
     };
+    report!(spec, Stage::Tree);
     log::debug!(target: "gnaw::timing", "tree:         {:>9.2?}", t.elapsed());
     t = Instant::now();
 
     // Chunk: each item → 0..n chunks.
     let chunks: Vec<Chunk> = items.iter().flat_map(|it| spec.chunker.chunk(it)).collect();
+    report!(spec, Stage::Chunk);
     log::debug!(target: "gnaw::timing", "chunk:        {:>9.2?}  ({} chunks)", t.elapsed(), chunks.len());
     t = Instant::now();
 
@@ -95,6 +110,7 @@ pub fn run(spec: &PipelineSpec, opts: &SourceOpts) -> Result<Rendered, PipelineE
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    report!(spec, Stage::Rank);
     log::debug!(target: "gnaw::timing", "rank:         {:>9.2?}", t.elapsed());
     t = Instant::now();
 
@@ -111,9 +127,11 @@ pub fn run(spec: &PipelineSpec, opts: &SourceOpts) -> Result<Rendered, PipelineE
     t = Instant::now();
 
     // Render — now takes the items-derived context as a second argument.
+    report!(spec, Stage::Render);
     let rendered = spec.renderer.render(&selection, &render_ctx)?;
     log::debug!(target: "gnaw::timing", "render:       {:>9.2?}", t.elapsed());
 
+    report!(spec, Stage::Done);
     log::debug!(target: "gnaw::timing", "TOTAL:        {:>9.2?}", overall.elapsed());
 
     Ok(Rendered {

@@ -95,6 +95,7 @@ pub fn build_spec(config: &GnawConfig) -> Result<PipelineSpec> {
         budget: 0,
         root_label,
         sort_method: config.sort_method,
+        progress: None,
     })
 }
 

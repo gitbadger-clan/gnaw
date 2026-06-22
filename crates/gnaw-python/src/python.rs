@@ -63,6 +63,7 @@ fn run_pipeline(config: &GnawConfig) -> Result<Rendered, String> {
         budget: 0,
         root_label: display_name(&config.path),
         sort_method: config.sort_method,
+        progress: None,
     };
 
     run(&spec, &SourceOpts).map_err(|e| e.to_string())
