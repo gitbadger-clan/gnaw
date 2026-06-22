@@ -1259,6 +1259,7 @@ dependencies = [
  "globset",
  "gnaw-adapters",
  "gnaw-core",
+ "gnaw-pipeline",
  "handlebars",
  "ignore",
  "indicatif",
@@ -1285,11 +1286,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "gnaw-mcp"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "gnaw-core",
+ "gnaw-pipeline",
+ "rmcp",
+ "schemars",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "gnaw-pipeline"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "gnaw-adapters",
+ "gnaw-core",
+ "rstest",
+ "tempfile",
+]
+
+[[package]]
 name = "gnaw-python"
 version = "0.1.1"
 dependencies = [
- "gnaw-adapters",
  "gnaw-core",
+ "gnaw-pipeline",
  "pyo3",
  "serde_json",
 ]

@@ -1,0 +1,31 @@
+[package]
+name = "gnaw-pipeline"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Composition root for gnaw's extraction pipeline: build_spec / run_extraction, shared by the CLI, MCP server, Python bindings, and the planned REST surface."
+keywords = ["llm", "prompt", "pipeline", "gnaw"]
+categories = ["development-tools"]
+homepage = "https://gnaw.gitbadger.com"
+readme = "../../README.md"
+
+[features]
+default = []
+# Forwards to the adapter's syntax-aware compression so a frontend can opt in
+# through the pipeline crate rather than reaching past it to gnaw-adapters.
+compression = ["gnaw-adapters/compression"]
+
+[dependencies]
+gnaw-core = { workspace = true }
+gnaw-adapters = { workspace = true }
+anyhow = { workspace = true }
+
+[lib]
+name = "gnaw_pipeline"
+path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3.27"
+rstest = "0.26.1"

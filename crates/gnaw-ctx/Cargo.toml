@@ -15,11 +15,16 @@ readme = "../../README.md"
 [features]
 default = ["compression"]
 wayland = ["arboard/wayland-data-control"]
-compression = ["gnaw-adapters/compression"]
+# Compression now reaches gnaw-adapters through gnaw-pipeline. The direct
+# gnaw-adapters forward is kept so any adapter-gated code the CLI still touches
+# directly stays enabled; drop it once gnaw-ctx no longer depends on
+# gnaw-adapters directly.
+compression = ["gnaw-pipeline/compression", "gnaw-adapters/compression"]
 
 [dependencies]
 gnaw-core = { workspace = true, features = ["clap"] }
 gnaw-adapters = { workspace = true }
+gnaw-pipeline = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 env_logger = { workspace = true }
