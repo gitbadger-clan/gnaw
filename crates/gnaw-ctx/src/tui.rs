@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use crossterm::{
+    event::{Event, EventStream, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -18,6 +19,7 @@ use ratatui::{
 };
 use std::io::{Stdout, stdout};
 use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
 
 use crate::clipboard::copy_to_clipboard;
 use crate::model::{
@@ -67,55 +69,54 @@ impl TuiApp {
 
     // ~~~ Optimized Main Loop ~~~
     pub async fn run(&mut self) -> Result<()> {
-        // Initialize file tree
         self.handle_message(Message::RefreshFileTree)?;
 
+        let mut events = EventStream::new();
+
         loop {
-            // Process all available events with coalescing
-            let mut messages = Vec::new();
+            // Copy the animation flag out first so the select! guard doesn't
+            // borrow self while the message_rx branch borrows it mutably.
+            let animating = self.model.prompt_output.analysis_in_progress;
 
-            // Drain all available keyboard events
-            while crossterm::event::poll(std::time::Duration::from_millis(0))? {
-                if let crossterm::event::Event::Key(key) = crossterm::event::read()?
-                    && key.kind == crossterm::event::KeyEventKind::Press
-                {
-                    // Convert to ratatui KeyEvent
-                    let ratatui_key = self.convert_crossterm_key(key);
-
-                    // Handle the key event
-                    if let Some(message) = self.handle_key_event(ratatui_key) {
-                        if let Some(last_message) = messages.last_mut()
-                            && self.try_coalesce_messages(last_message, &message)
-                        {
-                            continue; // Message was coalesced
+            tokio::select! {
+                // Branch 1: next terminal event.
+                maybe_event = events.next() => {
+                    match maybe_event {
+                        Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                            let ratatui_key = self.convert_crossterm_key(key);
+                            if let Some(message) = self.handle_key_event(ratatui_key) {
+                                self.handle_message(message)?;
+                            }
                         }
-                        messages.push(message);
+                        Some(Ok(_)) => {}            // resize / mouse / focus
+                        Some(Err(e)) => return Err(e.into()),
+                        None => break,               // stdin closed
                     }
                 }
+
+                // Branch 2: next internal message (analysis result, progress,
+                // streamed token counts). recv() borrows &mut self.message_rx.
+                maybe_msg = self.message_rx.recv() => {
+                    match maybe_msg {
+                        Some(message) => self.handle_message(message)?,
+                        None => {} // all senders dropped; tasks gone
+                    }
+                }
+
+                // Branch 3: animation tick — ONLY armed while something is
+                // spinning. When idle this branch is disabled, so the loop
+                // truly sleeps (zero idle CPU) instead of waking at 60fps.
+                _ = tokio::time::sleep(std::time::Duration::from_millis(80)), if animating => {}
             }
 
-            // Handle all messages
-            for message in messages {
-                self.handle_message(message)?;
-            }
-
-            // Handle internal messages (non-blocking)
-            while let Ok(message) = self.message_rx.try_recv() {
-                self.handle_message(message)?;
-            }
-
-            // Render the UI
-            let model = self.model.clone();
-            self.terminal.draw(|frame| {
-                TuiApp::render_with_model(&model, frame);
-            })?;
+            let Self {
+                terminal, model, ..
+            } = self;
+            terminal.draw(|frame| TuiApp::render_with_model(model, frame))?;
 
             if self.model.should_quit {
                 break;
             }
-
-            // Small sleep to prevent busy waiting
-            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
         }
 
         Ok(())
@@ -763,33 +764,6 @@ impl TuiApp {
                 crossterm::event::KeyEventKind::Release => KeyEventKind::Release,
             },
             state: KeyEventState::from_bits_truncate(key.state.bits()),
-        }
-    }
-
-    /// Try to coalesce two messages if they are similar (e.g., scroll events)
-    fn try_coalesce_messages(&self, last_message: &mut Message, new_message: &Message) -> bool {
-        match (last_message, new_message) {
-            (Message::MoveTreeCursor(delta1), Message::MoveTreeCursor(delta2)) => {
-                *delta1 += delta2;
-                true
-            }
-            (Message::MoveSettingsCursor(delta1), Message::MoveSettingsCursor(delta2)) => {
-                *delta1 += delta2;
-                true
-            }
-            (Message::ScrollStatistics(delta1), Message::ScrollStatistics(delta2)) => {
-                *delta1 += delta2;
-                true
-            }
-            (Message::ScrollOutput(delta1), Message::ScrollOutput(delta2)) => {
-                *delta1 += delta2;
-                true
-            }
-            (Message::TemplatePickerMove(delta1), Message::TemplatePickerMove(delta2)) => {
-                *delta1 += delta2;
-                true
-            }
-            _ => false, // Cannot coalesce these messages
         }
     }
 }

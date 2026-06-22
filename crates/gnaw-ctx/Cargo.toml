@@ -38,6 +38,7 @@ ansi_term = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tui-tree-widget = { workspace = true }
 ratatui-textarea = { workspace = true }
 walkdir = { workspace = true }
