@@ -35,7 +35,11 @@ impl<'a> StatefulWidget for OutputWidget<'a> {
 
         // Simplified status bar - focus only on prompt availability
         let info_text = if self.model.prompt_output.analysis_in_progress {
-            "Generating prompt...".to_string()
+            match self.model.prompt_output.analysis_stage {
+                Some(gnaw_core::pipeline::Stage::Count) => "Counting tokens…".to_string(),
+                Some(stage) => format!("{stage:?}…"),
+                None => "Generating prompt…".to_string(),
+            }
         } else if let Some(error) = &self.model.prompt_output.analysis_error {
             format!("Generation failed: {}", error)
         } else if self.model.prompt_output.generated_prompt.is_some() {

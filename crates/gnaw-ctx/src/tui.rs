@@ -562,6 +562,10 @@ impl TuiApp {
                         // custom, non-diff run; swap its pattern selector for the
                         // explicit one built from the user's selection.
                         let mut spec = crate::pipeline_spec::build_spec(&config)?;
+                        let ptx = tx.clone();
+                        spec.progress = Some(Box::new(move |stage| {
+                            let _ = ptx.send(Message::AnalysisProgress(stage));
+                        }));
                         spec.selector = Box::new(ExplicitSelector::new(selected));
 
                         let r = run(&spec, &SourceOpts)?;

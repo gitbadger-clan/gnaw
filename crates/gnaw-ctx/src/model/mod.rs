@@ -317,6 +317,7 @@ pub enum Message {
     RunAnalysis,
     AnalysisComplete(AnalysisResults),
     AnalysisError(String),
+    AnalysisProgress(gnaw_core::pipeline::Stage),
 
     CopyToClipboard,
     SaveToFile(String),
@@ -1145,6 +1146,7 @@ impl Model {
 
             Message::AnalysisComplete(results) => {
                 new_model.prompt_output.analysis_in_progress = false;
+                new_model.prompt_output.analysis_stage = None;
                 new_model.prompt_output.generated_prompt = Some(results.generated_prompt);
                 new_model.prompt_output.token_count = results.token_count;
                 new_model.prompt_output.file_count = results.file_count;
@@ -1159,8 +1161,14 @@ impl Model {
                 (new_model, Cmd::None)
             }
 
+            Message::AnalysisProgress(stage) => {
+                new_model.prompt_output.analysis_stage = Some(stage);
+                (new_model, Cmd::None)
+            }
+
             Message::AnalysisError(error) => {
                 new_model.prompt_output.analysis_in_progress = false;
+                new_model.prompt_output.analysis_stage = None;
                 new_model.prompt_output.analysis_error = Some(error.clone());
                 new_model.status_message = format!("Analysis failed: {}", error);
                 (new_model, Cmd::None)

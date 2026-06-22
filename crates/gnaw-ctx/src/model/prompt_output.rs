@@ -11,6 +11,7 @@ pub struct PromptOutputState {
     pub file_count: usize,
     pub analysis_in_progress: bool,
     pub analysis_error: Option<String>,
+    pub analysis_stage: Option<gnaw_core::pipeline::Stage>,
     pub output_scroll: u16,
 }
 
