@@ -39,6 +39,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+futures-util = { workspace = true }
 tui-tree-widget = { workspace = true }
 ratatui-textarea = { workspace = true }
 walkdir = { workspace = true }

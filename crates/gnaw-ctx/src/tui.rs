@@ -11,6 +11,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use futures_util::FutureExt;
 use gnaw_core::session::SelectionState;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
@@ -87,19 +88,37 @@ impl TuiApp {
                             if let Some(message) = self.handle_key_event(ratatui_key) {
                                 self.handle_message(message)?;
                             }
+
+                            // Drain any events already queued this same wakeup
+                            // so a burst (held key / fast scroll) costs one
+                            // redraw, not one per event. now_or_never() returns
+                            // None the moment the stream isn't immediately ready.
+                            while let Some(ready) = events.next().now_or_never() {
+                                match ready {
+                                    Some(Ok(Event::Key(k))) if k.kind == KeyEventKind::Press => {
+                                        let rk = self.convert_crossterm_key(k);
+                                        if let Some(msg) = self.handle_key_event(rk) {
+                                            self.handle_message(msg)?;
+                                        }
+                                    }
+                                    Some(Ok(_)) => {}          // ready, not a keypress
+                                    Some(Err(e)) => return Err(e.into()),
+                                    None => break,             // stream ended
+                                }
+                            }
                         }
-                        Some(Ok(_)) => {}            // resize / mouse / focus
+                        Some(Ok(_)) => {}
                         Some(Err(e)) => return Err(e.into()),
-                        None => break,               // stdin closed
+                        None => break,
                     }
                 }
 
                 // Branch 2: next internal message (analysis result, progress,
                 // streamed token counts). recv() borrows &mut self.message_rx.
+                // None = all senders dropped (tasks gone); nothing to do.
                 maybe_msg = self.message_rx.recv() => {
-                    match maybe_msg {
-                        Some(message) => self.handle_message(message)?,
-                        None => {} // all senders dropped; tasks gone
+                    if let Some(message) = maybe_msg {
+                        self.handle_message(message)?;
                     }
                 }
 
