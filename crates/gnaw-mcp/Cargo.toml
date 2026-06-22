@@ -1,0 +1,33 @@
+[package]
+name = "gnaw-mcp"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Model Context Protocol server for gnaw: exposes codebase-to-prompt extraction as MCP tools."
+publish = false  # flip to a real publish once the tool surface is stable
+
+[[bin]]
+name = "gnaw-mcp"
+path = "src/main.rs"
+
+[dependencies]
+gnaw-core = { workspace = true }
+gnaw-pipeline = { workspace = true }
+# Confirm the current version on docs.rs/rmcp before building; the macro API
+# shifts between minor releases. As of early 2026 the latest is 0.16.x.
+rmcp = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+serde = { workspace = true }
+# Use rmcp's re-exported schemars/serde_json where possible to avoid version skew.
+schemars = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+default = []
+# Forward compression so an MCP build can produce compressed prompts too.
+compression = ["gnaw-pipeline/compression"]
