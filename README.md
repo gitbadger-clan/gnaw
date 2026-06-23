@@ -95,7 +95,7 @@ gnaw is more than just a CLI tool. It is a complete ecosystem for codebase conte
 
 | 🧱 Core Library | 💻 CLI / TUI | 🐍 Python | 🌐 REST | 🤖 MCP |
 | :---: | :---: | :---: | :---: | :---: |
-| `gnaw-core` — the internal, high-speed library responsible for secure file traversal, respecting `.gitignore` rules, and structuring Git metadata. | Designed for humans, featuring both a minimal CLI and an interactive TUI. Generate formatted prompts, track token usage, and output the result to your clipboard or stdout. | Fast Python bindings to the Rust core. Ideal for AI agents, automation scripts, or deep integration into RAG pipelines. | A planned axum-based REST interface, enabling browser extensions and other clients to request well-structured context over HTTP. | An MCP server (gnaw-mcp) that lets agentic clients — Claude Code, Desktop, Cursor — call gnaw as a tool over stdio. See the [how-to.] (https://gnaw.gitbadger.com/how-to/mcp-server/)|
+| `gnaw-core` — the internal, high-speed library responsible for secure file traversal, respecting `.gitignore` rules, and structuring Git metadata. | Designed for humans, featuring both a minimal CLI and an interactive TUI. Generate formatted prompts, track token usage, and output the result to your clipboard or stdout. | Fast Python bindings to the Rust core. Ideal for AI agents, automation scripts, or deep integration into RAG pipelines. | A planned axum-based REST interface, enabling browser extensions and other clients to request well-structured context over HTTP. | An MCP server (gnaw-mcp) that lets agentic clients — Claude Code, Desktop, Cursor — call gnaw as a tool over stdio. See the [how-to.](https://gnaw.gitbadger.com/how-to/mcp-server/)|
 
 ## 📚 Documentation
 
