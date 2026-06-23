@@ -36,6 +36,7 @@ gnaw-mcp = { path = "crates/gnaw-mcp", version = "0.1.1" }
 # External dependencies
 anyhow = "1.0.102"
 ansi_term = "0.12.1"
+aho-corasick = "1.1.4"
 arboard = { version = "3.6.1" }
 bracoxide = "0.1.8"
 colored = "3.1.1"

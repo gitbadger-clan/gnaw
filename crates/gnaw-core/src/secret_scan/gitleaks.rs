@@ -9,17 +9,27 @@
 //! cap rejects gitleaks' largest alternations, and (2) a small number of
 //! patterns use a construct Rust's parser won't accept. `compile_pattern`
 //! raises the limits and returns `Err` on the rest; the loader skips-and-counts
-//! those rather than failing the whole ruleset. Losing two niche rules beats
-//! refusing to scan because one didn't compile.
+//! those rather than failing the whole ruleset.
 //!
-//! Refresh the corpus with `scripts/update-gitleaks-rules.sh` (it pins a
-//! gitleaks release for reproducibility); then `cargo test -p gnaw-core
-//! gitleaks` reports the new compile rate.
+//! Performance: the ~360-rule corpus is made tractable by a single shared
+//! Aho-Corasick keyword prefilter. gitleaks pairs each rule with keywords that
+//! must be present for the rule to fire; instead of testing every rule's
+//! keywords against every file (hundreds of substring scans per file), we build
+//! ONE case-insensitive automaton over all keywords, run it once per file, and
+//! activate only the rules whose keywords actually appear. Rules without
+//! keywords are always-on. This also removes the per-file lowercase allocation,
+//! since the automaton matches case-insensitively against the original bytes.
+//!
+//! Refresh the corpus with `cargo xtask update-gitleaks`; then
+//! `cargo test -p gnaw-core gitleaks` reports the compile rate.
 
+use std::collections::HashMap;
+
+use aho_corasick::AhoCorasick;
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 
-use super::{Finding, SecretPolicy, SecretScanner, line_of, redact_preview, shannon_entropy};
+use super::{line_of, redact_preview, shannon_entropy, Finding, SecretPolicy, SecretScanner};
 
 /// The vendored default ruleset, baked into the binary at build time.
 const GITLEAKS_TOML: &str = include_str!("../../assets/gitleaks.toml");
@@ -84,10 +94,11 @@ struct CompiledRule {
     id: &'static str,
     re: Regex,
     secret_group: usize,
+    /// `secret_group == 0` — the whole match is the secret. Lets `scan` use the
+    /// cheaper `find_iter` (no capture-group tracking) for the common case.
+    whole_match: bool,
     /// 0.0 means "no entropy gate".
     min_entropy: f32,
-    /// Pre-lowercased for the prefilter.
-    keywords: Vec<String>,
     allow_res: Vec<Regex>,
     /// Pre-lowercased; always tested against the extracted secret.
     stopwords: Vec<String>,
@@ -97,6 +108,13 @@ struct CompiledRule {
 
 pub struct GitleaksScanner {
     rules: Vec<CompiledRule>,
+    /// Shared keyword automaton over every rule's keywords (case-insensitive).
+    /// `None` only if no rule declares a keyword.
+    keyword_ac: Option<AhoCorasick>,
+    /// keyword pattern id -> rule indices that declared it.
+    keyword_to_rules: Vec<Vec<usize>>,
+    /// Rule indices with no keywords: run on every file.
+    always_on: Vec<usize>,
     global_allow_res: Vec<Regex>,
     global_stopwords: Vec<String>,
     /// Rules whose regex Rust's engine rejected (visibility for the update test).
@@ -105,8 +123,8 @@ pub struct GitleaksScanner {
 
 /// Adapt a gitleaks (Go RE2) pattern to Rust's `regex`. Raises the compiled-size
 /// limits so big alternations build, and otherwise surfaces the error for the
-/// loader to skip. If a *specific* pattern you care about fails, the loader logs
-/// its id and you can add a targeted rewrite here before the build call.
+/// loader to skip. If a *specific* pattern you care about fails, add a targeted
+/// rewrite here before the build call.
 fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
     RegexBuilder::new(pat)
         .size_limit(50 * (1 << 20)) // 50 MiB program (default ~10 MiB)
@@ -127,6 +145,13 @@ impl GitleaksScanner {
 
         let mut rules = Vec::with_capacity(cfg.rules.len());
         let mut dropped = 0usize;
+
+        // Intern keywords (lowercased) into a shared pattern set so the
+        // automaton stays small when many rules share keywords like "key".
+        let mut kw_ids: HashMap<String, usize> = HashMap::new();
+        let mut kw_patterns: Vec<String> = Vec::new();
+        let mut keyword_to_rules: Vec<Vec<usize>> = Vec::new();
+        let mut always_on: Vec<usize> = Vec::new();
 
         for raw in cfg.rules {
             if raw.regex.trim().is_empty() {
@@ -157,16 +182,27 @@ impl GitleaksScanner {
                 }
             }
 
+            let rule_idx = rules.len();
+            if raw.keywords.is_empty() {
+                always_on.push(rule_idx);
+            } else {
+                for kw in &raw.keywords {
+                    let kw = kw.to_ascii_lowercase();
+                    let id = *kw_ids.entry(kw.clone()).or_insert_with(|| {
+                        kw_patterns.push(kw);
+                        keyword_to_rules.push(Vec::new());
+                        kw_patterns.len() - 1
+                    });
+                    keyword_to_rules[id].push(rule_idx);
+                }
+            }
+
             rules.push(CompiledRule {
                 id: Box::leak(raw.id.into_boxed_str()),
                 re,
                 secret_group: raw.secret_group,
+                whole_match: raw.secret_group == 0,
                 min_entropy: raw.entropy.unwrap_or(0.0),
-                keywords: raw
-                    .keywords
-                    .iter()
-                    .map(|k| k.to_ascii_lowercase())
-                    .collect(),
                 allow_res,
                 stopwords,
                 allow_targets_match,
@@ -186,8 +222,25 @@ impl GitleaksScanner {
             }
         }
 
+        let keyword_ac = if kw_patterns.is_empty() {
+            None
+        } else {
+            // Default match kind (Standard) supports `find_overlapping_iter`,
+            // which we need: a shorter keyword nested inside a longer one (e.g.
+            // "api" within "apikey") must still register so its rule activates.
+            Some(
+                AhoCorasick::builder()
+                    .ascii_case_insensitive(true)
+                    .build(&kw_patterns)
+                    .expect("aho-corasick build over gitleaks keyword set"),
+            )
+        };
+
         Ok(Self {
             rules,
+            keyword_ac,
+            keyword_to_rules,
+            always_on,
             global_allow_res,
             global_stopwords,
             dropped,
@@ -202,6 +255,30 @@ impl GitleaksScanner {
     /// Rules whose regex Rust's engine rejected from the vendored corpus.
     pub fn dropped_rules(&self) -> usize {
         self.dropped
+    }
+
+    /// One automaton pass marks which rules are live for `content`: the
+    /// always-on rules plus any rule whose keyword appears. Returns a per-rule
+    /// boolean indexed parallel to `self.rules`.
+    fn active_rules(&self, content: &str) -> Vec<bool> {
+        let mut active = vec![false; self.rules.len()];
+        for &r in &self.always_on {
+            active[r] = true;
+        }
+        if let Some(ac) = &self.keyword_ac {
+            let mut seen = vec![false; self.keyword_to_rules.len()];
+            for m in ac.find_overlapping_iter(content) {
+                let pid = m.pattern().as_usize();
+                if seen[pid] {
+                    continue;
+                }
+                seen[pid] = true;
+                for &r in &self.keyword_to_rules[pid] {
+                    active[r] = true;
+                }
+            }
+        }
+        active
     }
 
     /// True if any allowlist (rule or global) suppresses this hit.
@@ -228,47 +305,55 @@ impl GitleaksScanner {
         };
         rule.allow_res.iter().any(|re| re.is_match(target))
     }
-
-    /// True if `rule`'s keyword prefilter passes for `content_lower`.
-    fn keyword_hit(rule: &CompiledRule, content_lower: &str) -> bool {
-        rule.keywords.is_empty()
-            || rule
-                .keywords
-                .iter()
-                .any(|k| content_lower.contains(k.as_str()))
-    }
 }
 
 impl SecretScanner for GitleaksScanner {
     fn scan(&self, content: &str) -> Vec<Finding> {
-        // Document-level keyword prefilter (gitleaks' own semantics): most rules
-        // never run because their keyword is absent from the file. Scanning the
-        // whole content (not line-by-line) preserves multi-line matches like
-        // private-key blocks; the line number is recovered from the byte offset.
-        let content_lower = content.to_ascii_lowercase();
+        let active = self.active_rules(content);
         let mut findings = Vec::new();
 
-        for rule in &self.rules {
-            if !Self::keyword_hit(rule, &content_lower) {
+        for (i, rule) in self.rules.iter().enumerate() {
+            if !active[i] {
                 continue;
             }
-            for caps in rule.re.captures_iter(content) {
-                let whole = caps.get(0).unwrap();
-                let target = caps.get(rule.secret_group).unwrap_or(whole);
-                let secret = target.as_str();
-                let entropy = shannon_entropy(secret);
-                if rule.min_entropy > 0.0 && entropy < rule.min_entropy {
-                    continue;
+            if rule.whole_match {
+                // Common case: the whole match is the secret. `find_iter` skips
+                // capture-group tracking that `captures_iter` would pay for.
+                for m in rule.re.find_iter(content) {
+                    let secret = m.as_str();
+                    let entropy = shannon_entropy(secret);
+                    if rule.min_entropy > 0.0 && entropy < rule.min_entropy {
+                        continue;
+                    }
+                    if self.allowed(rule, secret, secret) {
+                        continue;
+                    }
+                    findings.push(Finding {
+                        rule_id: rule.id,
+                        line: line_of(content, m.start()),
+                        entropy,
+                        preview: redact_preview(secret),
+                    });
                 }
-                if self.allowed(rule, secret, whole.as_str()) {
-                    continue;
+            } else {
+                for caps in rule.re.captures_iter(content) {
+                    let whole = caps.get(0).unwrap();
+                    let target = caps.get(rule.secret_group).unwrap_or(whole);
+                    let secret = target.as_str();
+                    let entropy = shannon_entropy(secret);
+                    if rule.min_entropy > 0.0 && entropy < rule.min_entropy {
+                        continue;
+                    }
+                    if self.allowed(rule, secret, whole.as_str()) {
+                        continue;
+                    }
+                    findings.push(Finding {
+                        rule_id: rule.id,
+                        line: line_of(content, target.start()),
+                        entropy,
+                        preview: redact_preview(secret),
+                    });
                 }
-                findings.push(Finding {
-                    rule_id: rule.id,
-                    line: line_of(content, target.start()),
-                    entropy,
-                    preview: redact_preview(secret),
-                });
             }
         }
 
@@ -282,10 +367,12 @@ impl SecretScanner for GitleaksScanner {
             return (content.to_string(), findings);
         }
 
-        let content_lower = content.to_ascii_lowercase();
+        // Active set computed from the original content; redaction only removes
+        // secrets, so no rule that was inactive could become active mid-rewrite.
+        let active = self.active_rules(content);
         let mut out = content.to_string();
-        for rule in &self.rules {
-            if !Self::keyword_hit(rule, &content_lower) {
+        for (i, rule) in self.rules.iter().enumerate() {
+            if !active[i] {
                 continue;
             }
             out = rule
@@ -320,15 +407,12 @@ mod tests {
     #[test]
     fn vendored_ruleset_compiles() {
         let s = GitleaksScanner::load_default();
-        // The gitleaks corpus is large; if hardly anything compiled, the vendored
-        // file or the adapter regressed.
         assert!(
             s.rule_count() > 100,
             "only {} gitleaks rules compiled ({} dropped)",
             s.rule_count(),
             s.dropped_rules()
         );
-        // Visibility into what Rust's engine rejected from the Go corpus.
         eprintln!(
             "gitleaks: {} rules compiled, {} dropped",
             s.rule_count(),
@@ -339,6 +423,7 @@ mod tests {
     #[test]
     fn detects_aws_access_key() {
         let s = GitleaksScanner::load_default();
+        // AKIA + 16 chars from the base32 alphabet [A-Z2-7], high entropy.
         let f = s.scan("aws_key = AKIAXM7QV4ZK3RT6WJF5");
         assert!(
             f.iter().any(|h| h.rule_id.contains("aws")),
@@ -350,8 +435,6 @@ mod tests {
     #[test]
     fn canonical_example_key_is_allowlisted() {
         let s = GitleaksScanner::load_default();
-        // The gitleaks global allowlist suppresses canonical example creds.
-        // If this fails, the vendored corpus changed its stopword list.
         assert!(s.scan("key = AKIAIOSFODNN7EXAMPLE").is_empty());
     }
 }

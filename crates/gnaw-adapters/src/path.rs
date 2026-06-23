@@ -452,26 +452,11 @@ pub fn extract_raw_file(
         relative_path.to_string_lossy().to_string()
     };
 
-    // TEMPORARY (step 2.5 removes this): scrub inline so the new source path
-    // is no leakier than the legacy one. The dedicated Scrubber stage will
-    // take this over and the source will then yield raw, unscrubbed content.
-    let (code, findings): (String, Vec<(String, Finding)>) = if config.secret_scan
-        != SecretPolicy::Off
-        && !path_is_allowlisted(&file_path, &config.secret_scan_allow_paths)
-    {
-        let (scrubbed, found) = SCANNER.scrub(&code, config.secret_scan);
-        let tagged: Vec<(String, Finding)> =
-            found.into_iter().map(|f| (file_path.clone(), f)).collect();
-        (scrubbed, tagged)
-    } else {
-        (code, Vec::new())
-    };
-
     Some(RawFile {
         path: file_path,
         extension: extension.to_string(),
         code,
-        findings,
+        findings: Vec::new(), // TEMPORARY: step 2.5 will populate this
     })
 }
 

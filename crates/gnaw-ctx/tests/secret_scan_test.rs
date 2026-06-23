@@ -8,7 +8,7 @@ use predicates::str::contains;
 use rstest::*;
 
 /// Exactly 36 trailing chars → matches the github-pat rule; all-distinct → high entropy.
-const FAKE_PAT: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+const FAKE_PAT: &str = "ghp_R8xK3mNp2qWvT7yZ1aB4cD6eF9gH0jL5sUe";
 /// AWS's documentation key — on the builtin allowlist, must never be redacted.
 const AWS_EXAMPLE: &str = "AKIAIOSFODNN7EXAMPLE";
 

@@ -11,10 +11,16 @@
 //! takes `&str` and the original text is moved straight back. Cloning here
 //! (the old behavior) duplicated the whole codebase on every default run,
 //! since `warn` is the default policy.
+//!
+//! Files are scanned in parallel (rayon): each item is independent and the scan
+//! is CPU-bound. Determinism is preserved because `into_par_iter().map().collect()`
+//! keeps input order, and each item collects its OWN findings (no shared Vec),
+//! which are flattened back in item order.
 
 use gnaw_core::configuration::GnawConfig;
 use gnaw_core::pipeline::{FindingDto, RawContent, RawItem, Scrubber};
 use gnaw_core::secret_scan::{SCANNER, SecretPolicy, SecretScanner};
+use rayon::prelude::*;
 
 pub struct SecretScrubber {
     policy: SecretPolicy,
@@ -29,9 +35,11 @@ impl SecretScrubber {
         }
     }
 
-    /// Scan `text`, appending findings tagged with `path`. Returns `Some(rewritten)`
-    /// ONLY when the policy redacts; `None` means "keep the original" — the hot path
-    /// for the default `warn`, where we must not clone the file body.
+    /// Scan `text`, appending findings tagged with `path` to `out`. Returns
+    /// `Some(rewritten)` ONLY when the policy redacts; `None` means "keep the
+    /// original" — the hot path for the default `warn`, where we must not clone
+    /// the file body. `out` is the item's own buffer (not shared), so this is
+    /// safe to call from a rayon worker.
     fn scan_field(&self, path: &str, text: &str, out: &mut Vec<FindingDto>) -> Option<String> {
         if self.policy == SecretPolicy::Redact {
             let (scrubbed, found) = SCANNER.scrub(text, SecretPolicy::Redact);
@@ -46,6 +54,48 @@ impl SecretScrubber {
             None
         }
     }
+
+    /// Scrub one item, returning the (possibly rewritten) item and ITS OWN
+    /// findings. Pure per-item work — no shared state — so it runs on any thread.
+    fn scrub_item(&self, item: RawItem) -> (RawItem, Vec<FindingDto>) {
+        if path_is_allowlisted(&item.path, &self.allow_paths) {
+            return (item, Vec::new());
+        }
+
+        let mut findings = Vec::new();
+        let content = match item.content {
+            RawContent::Text { text } => match self.scan_field(&item.path, &text, &mut findings) {
+                Some(scrubbed) => RawContent::Text { text: scrubbed },
+                None => RawContent::Text { text }, // moved back — no clone
+            },
+            RawContent::Changed {
+                after,
+                before,
+                patch,
+            } => {
+                let after = self
+                    .scan_field(&item.path, &after, &mut findings)
+                    .unwrap_or(after);
+                let before =
+                    before.map(|b| self.scan_field(&item.path, &b, &mut findings).unwrap_or(b));
+                let patch =
+                    patch.map(|p| self.scan_field(&item.path, &p, &mut findings).unwrap_or(p));
+                RawContent::Changed {
+                    after,
+                    before,
+                    patch,
+                }
+            }
+            // Binary/omitted: nothing to scan.
+            RawContent::Omitted => RawContent::Omitted,
+        };
+
+        // Dedup this item's findings by (rule_id, line) — diff fields re-surface
+        // the same secret across before/after/patch.
+        dedup_findings(&mut findings);
+
+        (RawItem { content, ..item }, findings)
+    }
 }
 
 impl Scrubber for SecretScrubber {
@@ -53,66 +103,30 @@ impl Scrubber for SecretScrubber {
         if self.policy == SecretPolicy::Off {
             return (items, Vec::new());
         }
-
-        let mut findings = Vec::new();
-        let scrubbed_items = items
-            .into_iter()
-            .map(|item| {
-                if path_is_allowlisted(&item.path, &self.allow_paths) {
-                    return item;
-                }
-
-                // Per-item finding window, so we can dedup within this item
-                // (a secret in both `patch` and `after` is one finding, not two).
-                let start = findings.len();
-
-                let content = match item.content {
-                    RawContent::Text { text } => {
-                        match self.scan_field(&item.path, &text, &mut findings) {
-                            Some(scrubbed) => RawContent::Text { text: scrubbed },
-                            None => RawContent::Text { text }, // moved back — no clone
-                        }
-                    }
-                    RawContent::Changed {
-                        after,
-                        before,
-                        patch,
-                    } => {
-                        let after = self
-                            .scan_field(&item.path, &after, &mut findings)
-                            .unwrap_or(after);
-                        let before = before
-                            .map(|b| self.scan_field(&item.path, &b, &mut findings).unwrap_or(b));
-                        let patch = patch
-                            .map(|p| self.scan_field(&item.path, &p, &mut findings).unwrap_or(p));
-                        RawContent::Changed {
-                            after,
-                            before,
-                            patch,
-                        }
-                    }
-                    // Binary/omitted: nothing to scan.
-                    RawContent::Omitted => RawContent::Omitted,
-                };
-
-                // Dedup this item's findings by (rule_id, line) — diff fields
-                // re-surface the same secret across before/after/patch.
-                dedup_item_findings(&mut findings, start);
-
-                RawItem { content, ..item }
-            })
+        // Parallel per-item scan; `collect` into a Vec preserves input order, so
+        // both the items and the flattened findings stay deterministic.
+        let per_item: Vec<(RawItem, Vec<FindingDto>)> = items
+            .into_par_iter()
+            .map(|item| self.scrub_item(item))
             .collect();
+
+        let mut scrubbed_items = Vec::with_capacity(per_item.len());
+        let mut findings = Vec::new();
+        for (item, mut item_findings) in per_item {
+            scrubbed_items.push(item);
+            findings.append(&mut item_findings);
+        }
 
         (scrubbed_items, findings)
     }
 }
 
-/// Dedup findings added for one item (indices `start..`) by (rule_id, line),
-/// keeping first occurrence. In place, order-preserving.
-fn dedup_item_findings(findings: &mut Vec<FindingDto>, start: usize) {
+/// Dedup a single item's findings by (rule_id, line), keeping first occurrence.
+/// In place, order-preserving.
+fn dedup_findings(findings: &mut Vec<FindingDto>) {
     let mut seen = std::collections::HashSet::new();
-    let mut write = start;
-    for read in start..findings.len() {
+    let mut write = 0;
+    for read in 0..findings.len() {
         let key = (findings[read].rule_id.clone(), findings[read].line);
         if seen.insert(key) {
             findings.swap(write, read);

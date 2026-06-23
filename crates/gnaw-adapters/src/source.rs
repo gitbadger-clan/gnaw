@@ -10,6 +10,7 @@ use gnaw_core::configuration::GnawConfig;
 use gnaw_core::pipeline::{ContextSource, PipelineError, RawContent, RawItem, SourceOpts};
 use gnaw_core::secret_scan::Finding;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use std::path::PathBuf;
 
 /// Wraps the legacy working-tree walk. Discovery + per-file raw extraction,
@@ -44,45 +45,43 @@ impl ContextSource for WorkingTreeSource {
             .canonicalize()
             .map_err(|e| PipelineError::Source(format!("canonicalize root: {e}")))?;
 
-        let walker = WalkBuilder::new(&root)
+        // Walk first (cheap, inherently sequential) to collect paths. The
+        // expensive part — read + decode + process + compress per file — then
+        // runs in parallel. The old code did all of it in one sequential loop,
+        // which is why "source" was the largest stage and ignored core count.
+        let files: Vec<PathBuf> = WalkBuilder::new(&root)
             .hidden(!self.config.hidden)
             .git_ignore(!self.config.no_ignore)
             .follow_links(self.config.follow_symlinks)
             .build()
-            .filter_map(|e| e.ok());
+            .filter_map(|e| e.ok())
+            .map(|e| e.into_path())
+            .filter(|p| p.is_file())
+            .collect();
 
-        let mut items = Vec::new();
-        let mut all_findings = Vec::new();
-
-        for entry in walker {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Ok(rel) = path.strip_prefix(&root) else {
-                continue;
-            };
-            if let Some(RawFile {
-                path: p,
-                extension: ext,
-                code,
-                findings,
-            }) = extract_raw_file(path, rel, &self.config)
-            {
-                all_findings.extend(findings);
-                items.push(RawItem {
+        let mut items: Vec<RawItem> = files
+            .par_iter()
+            .filter_map(|path| {
+                let rel = path.strip_prefix(&root).ok()?;
+                let RawFile {
+                    path: p,
+                    extension: ext,
+                    code,
+                    ..
+                } = extract_raw_file(path, rel, &self.config)?;
+                Some(RawItem {
                     path: p,
                     extension: ext,
                     content: RawContent::Text { text: code },
                     status: None,
                     old_path: None,
-                });
-            }
-        }
+                })
+            })
+            .collect();
 
-        // Deterministic order — snapshots and wire output must be byte-stable.
         items.sort_by(|a, b| a.path.cmp(&b.path));
-        *self.findings.lock().unwrap() = all_findings;
+        // Findings come from the SecretScrubber stage now; source no longer scans.
+        *self.findings.lock().unwrap() = Vec::new();
         Ok(items)
     }
 }
