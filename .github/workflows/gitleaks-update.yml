@@ -1,0 +1,54 @@
+name: Update gitleaks ruleset
+
+on:
+  schedule:
+    # Daily at ~06:17 UTC. Off the hour on purpose — scheduled runs at :00 are
+    # the most delayed under GitHub load.
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Resolves the latest gitleaks release and rewrites the vendored asset.
+      # No-ops on the working tree if we're already current.
+      - name: Fetch latest gitleaks ruleset
+        run: cargo xtask update-gitleaks
+
+      # Gate: if the new corpus doesn't compile in Rust's regex engine at the
+      # expected rate, fail here so a broken ruleset never reaches a PR.
+      - name: Verify the ruleset compiles
+        run: cargo test -p gnaw-core gitleaks
+
+      # No-ops when the asset is unchanged; otherwise creates/updates the PR.
+      - name: Open PR if the ruleset changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          base: main
+          branch: chore/update-gitleaks-ruleset
+          title: "chore: update vendored gitleaks ruleset"
+          commit-message: "chore: update vendored gitleaks ruleset"
+          labels: |
+            dependencies
+            automated
+          add-paths: |
+            crates/gnaw-core/assets/gitleaks.toml
+          body: |
+            Automated daily refresh of the vendored gitleaks secret-scanning
+            ruleset (`crates/gnaw-core/assets/gitleaks.toml`).
+
+            The compile-rate test (`cargo test -p gnaw-core gitleaks`) passed in
+            this run. Review the diff for rules added/removed, then merge.
