@@ -7,6 +7,7 @@ members = [
     "crates/gnaw-python",
     "crates/gnaw-pipeline", 
     "crates/gnaw-mcp",
+    "xtask"
 ]
 default-members = ["crates/gnaw-core", "crates/gnaw-adapters", "crates/gnaw-ctx"]
 
