@@ -5,11 +5,14 @@
 //! deterministic; a future checksum or model-based scorer can implement the same
 //! trait without touching callers.
 
+mod gitleaks;
+
+use gitleaks::GitleaksScanner;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-pub static SCANNER: once_cell::sync::Lazy<crate::secret_scan::RegexRuleScanner> =
-    once_cell::sync::Lazy::new(crate::secret_scan::RegexRuleScanner::default);
+pub static SCANNER: once_cell::sync::Lazy<GitleaksScanner> =
+    once_cell::sync::Lazy::new(GitleaksScanner::load_default);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
