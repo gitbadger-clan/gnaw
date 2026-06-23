@@ -80,13 +80,22 @@ gnaw .
 gnaw path/to/project --output-file prompt.txt
 ```
 
+### MCP server 🤖
+
+Not yet on crates.io — build `gnaw-mcp` from source:
+
+```bash
+cargo install --git https://github.com/gitbadger-clan/gnaw gnaw-mcp
+```
+
+Then register it with your MCP client. See [Use gnaw as an MCP server](https://gnaw.gitbadger.com/how-to/mcp-server/).
 ## 🌐 Ecosystem
 
 gnaw is more than just a CLI tool. It is a complete ecosystem for codebase context.
 
 | 🧱 Core Library | 💻 CLI / TUI | 🐍 Python | 🌐 REST | 🤖 MCP |
 | :---: | :---: | :---: | :---: | :---: |
-| `gnaw-core` — the internal, high-speed library responsible for secure file traversal, respecting `.gitignore` rules, and structuring Git metadata. | Designed for humans, featuring both a minimal CLI and an interactive TUI. Generate formatted prompts, track token usage, and output the result to your clipboard or stdout. | Fast Python bindings to the Rust core. Ideal for AI agents, automation scripts, or deep integration into RAG pipelines. | A planned axum-based REST interface, enabling browser extensions and other clients to request well-structured context over HTTP. | A planned MCP server, letting agentic applications call gnaw as a tool to read your codebase without bloating their context window. |
+| `gnaw-core` — the internal, high-speed library responsible for secure file traversal, respecting `.gitignore` rules, and structuring Git metadata. | Designed for humans, featuring both a minimal CLI and an interactive TUI. Generate formatted prompts, track token usage, and output the result to your clipboard or stdout. | Fast Python bindings to the Rust core. Ideal for AI agents, automation scripts, or deep integration into RAG pipelines. | A planned axum-based REST interface, enabling browser extensions and other clients to request well-structured context over HTTP. | An MCP server (gnaw-mcp) that lets agentic clients — Claude Code, Desktop, Cursor — call gnaw as a tool over stdio. See the [how-to.] (https://gnaw.gitbadger.com/how-to/mcp-server/)|
 
 ## 📚 Documentation
 
@@ -134,7 +143,7 @@ gnaw began as a fork of [code2prompt](https://github.com/mufeedvh/code2prompt) b
 
 - **Syntax-aware compression** — chunk on whole functions and types via tree-sitter, rather than arbitrary line cuts
 - **REST interface** *(planned)* — an axum surface so browser extensions and other clients can request context over HTTP
-- **MCP server** *(planned)* — expose gnaw as a tool for agentic applications
+- **MCP server** — exposes gnaw as a tool for agentic clients over MCP (stdio)
 
 The original code2prompt is MIT licensed. gnaw is dual-licensed under MIT OR Apache-2.0; portions derived from code2prompt remain under the upstream MIT license, whose copyright notice is preserved. See [License](#-license) for details.
 
