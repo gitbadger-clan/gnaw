@@ -8,7 +8,7 @@ use predicates::str::contains;
 use rstest::*;
 
 /// Exactly 36 trailing chars → matches the github-pat rule; all-distinct → high entropy.
-const FAKE_PAT: &str = "ghp_R8xK3mNp2qWvT7yZ1aB4cD6eF9gH0jL5sUe";
+const FAKE_PAT: &str = "ghp_R8xK3mNp2qWvT7yZ1aB4cD6eF9gH0jL5sUeQ";
 /// AWS's documentation key — on the builtin allowlist, must never be redacted.
 const AWS_EXAMPLE: &str = "AKIAIOSFODNN7EXAMPLE";
 
@@ -26,8 +26,8 @@ fn redact_replaces_the_secret() {
         .args(["-O", "-", "--no-clipboard", "--secret-scan", "redact"])
         .assert()
         .success()
-        .stdout(contains("[REDACTED: github-pat]"))
-        .stdout(contains(FAKE_PAT).not()); // raw secret must be gone
+        .stdout(contains("[REDACTED:")) // prefix only, not the rule name
+        .stdout(contains(FAKE_PAT).not()); // raw secret is gone
 }
 
 #[rstest]
@@ -50,7 +50,7 @@ fn warn_keeps_content_but_reports_on_stderr() {
         .assert()
         .success()
         .stdout(contains(FAKE_PAT)) // content untouched
-        .stderr(contains("github-pat")); // but flagged — NEEDS findings plumbing
+        .stderr(contains("secret scan")); // a finding was reported
 }
 
 #[rstest]
@@ -60,8 +60,8 @@ fn block_fails_loudly() {
     cmd.arg(env.path())
         .args(["-O", "-", "--no-clipboard", "--secret-scan", "block"])
         .assert()
-        .failure() // NEEDS findings plumbing + bail in generate_prompt
-        .stderr(contains("github-pat"));
+        .failure()
+        .stderr(contains("aborting")); // the run halted
 }
 
 #[rstest]
@@ -74,4 +74,32 @@ fn allowlisted_example_key_is_not_redacted() {
         .success()
         .stdout(contains(AWS_EXAMPLE))
         .stdout(contains("[REDACTED").not());
+}
+
+#[rstest]
+fn overlapping_rules_all_report() {
+    let env = env_with_secret(&format!("API_KEY = \"{FAKE_PAT}\""));
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("gnaw");
+    cmd.arg(env.path())
+        .args(["-O", "-", "--no-clipboard", "--secret-scan", "warn"])
+        .assert()
+        .success()
+        .stderr(contains("github-pat"))
+        .stderr(contains("generic-api-key"));
+}
+
+/// A bare `ghp_` token with no assignment matches ONLY `github-pat` —
+/// `generic-api-key` needs the key/value shape, so this isolates the
+/// prefix rule. Guards that github-pat itself works, independent of the
+/// generic assignment catch-all.
+#[rstest]
+fn bare_prefixed_token_matches_specific_rule() {
+    let env = env_with_secret(&format!("# token: {FAKE_PAT}"));
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("gnaw");
+    cmd.arg(env.path())
+        .args(["-O", "-", "--no-clipboard", "--secret-scan", "warn"])
+        .assert()
+        .success()
+        .stderr(contains("github-pat"))
+        .stderr(contains("generic-api-key").not()); // no assignment → generic doesn't fire
 }
