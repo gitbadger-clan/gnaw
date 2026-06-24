@@ -26,10 +26,11 @@
 use std::collections::HashMap;
 
 use aho_corasick::AhoCorasick;
+use rayon::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
 
-use super::{line_of, redact_preview, shannon_entropy, Finding, SecretPolicy, SecretScanner};
+use super::{Finding, SecretPolicy, SecretScanner, line_of, redact_preview, shannon_entropy};
 
 /// The vendored default ruleset, baked into the binary at build time.
 const GITLEAKS_TOML: &str = include_str!("../../assets/gitleaks.toml");
@@ -143,50 +144,97 @@ impl GitleaksScanner {
     pub fn from_toml(s: &str) -> Result<Self, toml::de::Error> {
         let cfg: RawConfig = toml::from_str(s)?;
 
-        let mut rules = Vec::with_capacity(cfg.rules.len());
-        let mut dropped = 0usize;
+        // Per-rule outcome of the parallel compile pass. Kept distinct so the
+        // sequential assembly reproduces the original drop accounting exactly: an
+        // empty regex is a SKIP (keyword-only rule, not a failure), a compile error
+        // is a DROP (counted), everything else is ready to install.
+        enum Prep {
+            Skip,
+            Dropped,
+            Ready(Prepared),
+        }
+        struct Prepared {
+            id: String,
+            re: Regex,
+            secret_group: usize,
+            min_entropy: f32,
+            keywords: Vec<String>,
+            allow_res: Vec<Regex>,
+            stopwords: Vec<String>,
+            allow_targets_match: bool,
+        }
 
-        // Intern keywords (lowercased) into a shared pattern set so the
-        // automaton stays small when many rules share keywords like "key".
+        // Compiling the ~360-rule corpus is the dominant startup cost (~2s serial):
+        // each rule is an RE2 program plus its allowlist regexes, all independent
+        // and pure. Compile in parallel. into_par_iter() preserves input ORDER, so
+        // the rule indices the keyword prefilter is built against below are
+        // identical to the serial version — findings are unchanged.
+        let prepared: Vec<Prep> = cfg
+            .rules
+            .into_par_iter()
+            .map(|raw| {
+                if raw.regex.trim().is_empty() {
+                    return Prep::Skip; // keyword-only rule: nothing to match on here
+                }
+                let re = match compile_pattern(&raw.regex) {
+                    Ok(re) => re,
+                    Err(_) => return Prep::Dropped,
+                };
+
+                let mut allow_res = Vec::new();
+                let mut stopwords = Vec::new();
+                let mut allow_targets_match = false;
+                for al in raw.allowlists.into_iter().chain(raw.allowlist) {
+                    if matches!(al.regex_target.as_deref(), Some("line" | "match")) {
+                        allow_targets_match = true;
+                    }
+                    for r in al.regexes {
+                        if let Ok(re) = compile_pattern(&r) {
+                            allow_res.push(re);
+                        }
+                    }
+                    for w in al.stopwords {
+                        stopwords.push(w.to_ascii_lowercase());
+                    }
+                }
+
+                Prep::Ready(Prepared {
+                    id: raw.id,
+                    re,
+                    secret_group: raw.secret_group,
+                    min_entropy: raw.entropy.unwrap_or(0.0),
+                    keywords: raw.keywords,
+                    allow_res,
+                    stopwords,
+                    allow_targets_match,
+                })
+            })
+            .collect();
+
+        // Sequential assembly: install compiled rules in order, intern keywords into
+        // the shared automaton, tally drops. Cheap next to compilation.
+        let mut rules = Vec::with_capacity(prepared.len());
+        let mut dropped = 0usize;
         let mut kw_ids: HashMap<String, usize> = HashMap::new();
         let mut kw_patterns: Vec<String> = Vec::new();
         let mut keyword_to_rules: Vec<Vec<usize>> = Vec::new();
         let mut always_on: Vec<usize> = Vec::new();
 
-        for raw in cfg.rules {
-            if raw.regex.trim().is_empty() {
-                continue; // keyword-only rules have nothing to match on here
-            }
-            let re = match compile_pattern(&raw.regex) {
-                Ok(re) => re,
-                Err(_) => {
+        for prep in prepared {
+            let prep = match prep {
+                Prep::Skip => continue,
+                Prep::Dropped => {
                     dropped += 1;
                     continue;
                 }
+                Prep::Ready(p) => p,
             };
 
-            let mut allow_res = Vec::new();
-            let mut stopwords = Vec::new();
-            let mut allow_targets_match = false;
-            for al in raw.allowlists.into_iter().chain(raw.allowlist) {
-                if matches!(al.regex_target.as_deref(), Some("line" | "match")) {
-                    allow_targets_match = true;
-                }
-                for r in al.regexes {
-                    if let Ok(re) = compile_pattern(&r) {
-                        allow_res.push(re);
-                    }
-                }
-                for w in al.stopwords {
-                    stopwords.push(w.to_ascii_lowercase());
-                }
-            }
-
             let rule_idx = rules.len();
-            if raw.keywords.is_empty() {
+            if prep.keywords.is_empty() {
                 always_on.push(rule_idx);
             } else {
-                for kw in &raw.keywords {
+                for kw in &prep.keywords {
                     let kw = kw.to_ascii_lowercase();
                     let id = *kw_ids.entry(kw.clone()).or_insert_with(|| {
                         kw_patterns.push(kw);
@@ -198,14 +246,14 @@ impl GitleaksScanner {
             }
 
             rules.push(CompiledRule {
-                id: Box::leak(raw.id.into_boxed_str()),
-                re,
-                secret_group: raw.secret_group,
-                whole_match: raw.secret_group == 0,
-                min_entropy: raw.entropy.unwrap_or(0.0),
-                allow_res,
-                stopwords,
-                allow_targets_match,
+                id: Box::leak(prep.id.into_boxed_str()),
+                whole_match: prep.secret_group == 0,
+                re: prep.re,
+                secret_group: prep.secret_group,
+                min_entropy: prep.min_entropy,
+                allow_res: prep.allow_res,
+                stopwords: prep.stopwords,
+                allow_targets_match: prep.allow_targets_match,
             });
         }
 
@@ -225,9 +273,6 @@ impl GitleaksScanner {
         let keyword_ac = if kw_patterns.is_empty() {
             None
         } else {
-            // Default match kind (Standard) supports `find_overlapping_iter`,
-            // which we need: a shorter keyword nested inside a longer one (e.g.
-            // "api" within "apikey") must still register so its rule activates.
             Some(
                 AhoCorasick::builder()
                     .ascii_case_insensitive(true)

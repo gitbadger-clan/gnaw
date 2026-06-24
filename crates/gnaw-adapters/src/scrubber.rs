@@ -103,21 +103,27 @@ impl Scrubber for SecretScrubber {
         if self.policy == SecretPolicy::Off {
             return (items, Vec::new());
         }
-        // Parallel per-item scan; `collect` into a Vec preserves input order, so
-        // both the items and the flattened findings stay deterministic.
-        let per_item: Vec<(RawItem, Vec<FindingDto>)> = items
+
+        // Per-file scan parallelizes: scrub_item is pure per-item work. Collect
+        // (item, its findings) preserving order, then flatten. into_par_iter()
+        // .map().collect() keeps input order and each item dedups its OWN
+        // findings, so the flattened sequence is byte-identical to the serial
+        // accumulator. SCANNER is a Sync static, and &self captures
+        // (policy, allow_paths) are Sync, so this is sound on rayon threads.
+        let scrubbed: Vec<(RawItem, Vec<FindingDto>)> = items
             .into_par_iter()
             .map(|item| self.scrub_item(item))
             .collect();
 
-        let mut scrubbed_items = Vec::with_capacity(per_item.len());
+        // Flatten in item order: same sequence the serial accumulator produced.
+        let mut items_out = Vec::with_capacity(scrubbed.len());
         let mut findings = Vec::new();
-        for (item, mut item_findings) in per_item {
-            scrubbed_items.push(item);
+        for (item, mut item_findings) in scrubbed {
+            items_out.push(item);
             findings.append(&mut item_findings);
         }
 
-        (scrubbed_items, findings)
+        (items_out, findings)
     }
 }
 

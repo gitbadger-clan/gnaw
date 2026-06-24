@@ -9,7 +9,6 @@ use common::fixtures::*;
 use common::*;
 use log::debug;
 use predicates::prelude::*;
-use predicates::prelude::*;
 use predicates::str::contains;
 use rstest::*;
 use std::fs;

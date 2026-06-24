@@ -1318,6 +1318,7 @@ dependencies = [
  "log",
  "once_cell",
  "predicates",
+ "rayon",
  "regex",
  "rstest",
  "serde",

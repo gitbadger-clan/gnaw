@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
         .bin("gnaw")
         .complete(); // first line; see prior note
 
+    gnaw_core::secret_scan::warm(); // precompile regexes for secret scan
     let matches = Cli::command().get_matches();
     let args = Cli::from_arg_matches(&matches)?;
 

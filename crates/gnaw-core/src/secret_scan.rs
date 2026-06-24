@@ -58,7 +58,11 @@ pub struct RegexRuleScanner {
     rules: Vec<Rule>,
     allow_values: Vec<Regex>, // known false positives (doc/example keys)
 }
-
+/// Force the secret-scan ruleset to compile now, so the cost lands here
+/// instead of inside the first `scrub` call. Idempotent.
+pub fn warm() {
+    once_cell::sync::Lazy::force(&SCANNER);
+}
 impl Default for RegexRuleScanner {
     fn default() -> Self {
         Self::with_defaults()
@@ -142,7 +146,10 @@ impl RegexRuleScanner {
 
 impl SecretScanner for RegexRuleScanner {
     fn scan(&self, content: &str) -> Vec<Finding> {
+        let t = std::time::Instant::now();
         let mut findings = Vec::new();
+        log::debug!(target: "gnaw::timing", "  pre-loop {:>7.1?}", t.elapsed());
+        let t2 = std::time::Instant::now();
         for rule in &self.rules {
             for caps in rule.re.captures_iter(content) {
                 let target = caps.get(rule.group).or_else(|| caps.get(0)).unwrap();
@@ -159,6 +166,7 @@ impl SecretScanner for RegexRuleScanner {
                 });
             }
         }
+        log::debug!(target: "gnaw::timing", "  rule-loop {:>7.1?}", t2.elapsed());
         findings.sort_by(|a, b| a.line.cmp(&b.line).then(a.rule_id.cmp(b.rule_id)));
         findings
     }

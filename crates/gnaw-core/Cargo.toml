@@ -39,6 +39,7 @@ termtree = { workspace = true }
 thiserror = { workspace = true }
 tiktoken-rs = { workspace = true }
 toml = { workspace = true }
+rayon = { workspace = true }
 chardetng = { workspace = true }
 tree-sitter = { workspace = true, optional = true }
 tree-sitter-rust = { workspace = true, optional = true }
