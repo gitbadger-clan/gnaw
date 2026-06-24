@@ -30,32 +30,45 @@ the full secret is never printed or logged.
 
 ## Detection rules
 
-Detection is regex match plus a Shannon-entropy gate per rule (a low-entropy
-match like a documentation example is rejected). Built-in rules:
+gnaw scans with the [gitleaks](https://github.com/gitleaks/gitleaks) ruleset
+(MIT-licensed), vendored into the binary so scanning is offline and
+reproducible — no network calls, no runtime download. Each rule is a regex
+plus, for most, a per-rule Shannon-entropy floor: a match below the floor (a
+low-entropy documentation example, say) is rejected, which is what keeps
+placeholder keys out of the report.
 
-| Rule id | Catches |
-| --- | --- |
-| `aws-access-key-id` | `AKIA…` access key ids |
-| `github-pat` | `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_` tokens |
-| `slack-token` | `xoxb-`/`xoxa-`/`xoxp-`/`xoxr-`/`xoxs-` tokens |
-| `google-api-key` | `AIza…` keys |
-| `anthropic-key` | `sk-ant-…` keys |
-| `openai-key` | `sk-…` / `sk-proj-…` keys |
-| `stripe-secret-key` | `sk_live_…` / `rk_live_…` keys |
-| `jwt` | `eyJ…`-shaped three-segment tokens |
-| `private-key-block` | PEM `-----BEGIN … PRIVATE KEY-----` blocks |
-| `crates-io-token` | `cio…` registry tokens |
-| `generic-assigned-secret` | a value assigned to a key/secret/token/password-named field |
+The ruleset is large — a few hundred rules — and covers the credential shapes
+you'd expect: cloud providers (AWS, GCP, Azure), source forges (GitHub, GitLab,
+Bitbucket), messaging and payments (Slack, Stripe, Twilio, SendGrid), AI vendors
+(OpenAI, Anthropic), package registries, PEM private-key blocks, JWTs, and a
+family of generic high-entropy assignment rules for `key`/`secret`/`token`/
+`password`-named fields. Because it's the upstream gitleaks ruleset, any shape
+gitleaks detects, gnaw detects.
 
-An allowlist suppresses known false positives (for example AWS's
-`AKIAIOSFODNN7EXAMPLE` documentation key and `EXAMPLE`/`dummy`/`placeholder`
-strings), so those won't be reported or redacted.
+A rule fires only when its keyword appears in the file (a fast prefilter), then
+the regex and entropy gate confirm the match — so a file with no candidate
+keywords is skipped cheaply, and the full ruleset only runs against files that
+could plausibly contain a secret.
 
-{% aside(kind="note", title="Prefixed vs unprefixed") %}
-Rules with a distinctive prefix (`ghp_`, `AKIA`, `cio`, `sk-ant-`) are reliable.
-Secrets with no prefix are only caught when they appear in a recognizable
-assignment via `generic-assigned-secret` — a bare unprefixed blob on its own
-line will not match, by design, to avoid flooding you with false positives.
+{% aside(kind="note", title="Staying current") %}
+The vendored ruleset is refreshed by a scheduled CI job that pulls the latest
+gitleaks release and opens a PR, so coverage tracks upstream without a manual
+sync. The exact ruleset version a build ships is stamped into the vendored file.
+{% end %}
+
+An allowlist suppresses known false positives — for example AWS's
+`AKIAIOSFODNN7EXAMPLE` documentation key — so those won't be reported or
+redacted. Rule-level allowlists from the gitleaks ruleset (stopwords like
+`EXAMPLE`/`example`, and per-rule path exceptions) are honored as well.
+
+{% aside(kind="note", title="What it catches, and what it can't") %}
+Rules anchored on a distinctive prefix (`ghp_`, `AKIA`, `sk-ant-`, …) are the
+most reliable — the prefix plus entropy makes a confident match. A secret with
+no recognizable prefix is only caught when it appears in a recognizable
+assignment (`api_key = "…"`) via a generic rule; a bare, unprefixed,
+unassigned blob on its own line won't match, by design, to avoid flooding the
+report with false positives. Treat scanning as strong risk reduction, not proof
+the output is clean.
 {% end %}
 
 ## Path allowlist
