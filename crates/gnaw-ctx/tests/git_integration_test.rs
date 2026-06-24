@@ -9,8 +9,10 @@ use common::fixtures::*;
 use common::*;
 use log::debug;
 use predicates::prelude::*;
+use predicates::prelude::*;
 use predicates::str::contains;
 use rstest::*;
+use std::fs;
 
 /// Test gitignore functionality - files should be ignored by default
 #[rstest]
@@ -97,4 +99,58 @@ fn test_gitignore_patterns(
         "File with pattern '{}' should be included with --no-ignore",
         pattern
     );
+}
+
+#[test]
+fn nested_gitignore_files_are_each_honored() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    // A real git repo: the `ignore` crate's gitignore handling only kicks in
+    // when it detects a repository (or you opt in). Initializing one makes the
+    // test reflect what a user actually has on disk.
+    std::process::Command::new("git")
+        .arg("init")
+        .current_dir(root)
+        .output()
+        .expect("git init");
+
+    // --- ROOT .gitignore: ignore a top-level build dir ---
+    fs::write(root.join(".gitignore"), "build/\n").unwrap();
+
+    // --- a nested package with its OWN .gitignore ---
+    fs::create_dir_all(root.join("pkg/src")).unwrap();
+    fs::write(root.join("pkg/.gitignore"), "generated/\n").unwrap();
+
+    // Files that MUST be excluded by the respective .gitignore:
+    fs::create_dir_all(root.join("build")).unwrap();
+    fs::write(root.join("build/ROOT_IGNORED.js"), "ROOT_IGNORED_CONTENT").unwrap();
+
+    fs::create_dir_all(root.join("pkg/generated")).unwrap();
+    fs::write(
+        root.join("pkg/generated/NESTED_IGNORED.js"),
+        "NESTED_IGNORED_CONTENT",
+    )
+    .unwrap();
+
+    // A file that the ROOT pattern must NOT reach into the nested dir for:
+    // `build/` at root should not ignore `pkg/build_helper.rs` (different name,
+    // and the root pattern is anchored to root anyway).
+    fs::write(root.join("pkg/src/KEEP_ME.rs"), "KEEP_ME_CONTENT").unwrap();
+
+    // And a top-level real file that must survive.
+    fs::write(root.join("main.rs"), "MAIN_CONTENT").unwrap();
+
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("gnaw");
+    cmd.arg(root)
+        .args(["-O", "-", "--no-clipboard"])
+        .assert()
+        .success()
+        // kept
+        .stdout(predicate::str::contains("MAIN_CONTENT"))
+        .stdout(predicate::str::contains("KEEP_ME_CONTENT"))
+        // excluded by ROOT .gitignore
+        .stdout(predicate::str::contains("ROOT_IGNORED_CONTENT").not())
+        // excluded by NESTED pkg/.gitignore — this is the real question
+        .stdout(predicate::str::contains("NESTED_IGNORED_CONTENT").not());
 }
