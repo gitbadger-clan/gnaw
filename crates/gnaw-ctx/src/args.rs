@@ -195,6 +195,11 @@ pub struct Cli {
     /// per-stage `gnaw::timing` breakdown (otherwise only via RUST_LOG).
     #[clap(long)]
     pub timing: bool,
+
+    /// Apply built-in exclude defaults for one or more ecosystems (build
+    /// artifacts, dependency dirs, caches). Layered onto --exclude.
+    #[arg(long = "lang", value_enum, num_args = 0.., value_delimiter = ',')]
+    pub lang: Vec<gnaw_core::language_profiles::LanguageProfile>,
 }
 
 /// Built-in template names for `--template` completion. Must be `'static`.

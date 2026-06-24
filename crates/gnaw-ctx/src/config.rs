@@ -69,6 +69,7 @@ pub fn build_session(
 
     let mut exclude_patterns = cfg_exclude;
     exclude_patterns.extend(expand_comma_separated_patterns(&args.exclude));
+    exclude_patterns.extend(gnaw_core::language_profiles::profile_excludes(&args.lang));
 
     configuration
         .include_patterns(include_patterns)
