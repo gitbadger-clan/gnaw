@@ -289,6 +289,61 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn test_exclude_node_modules_at_all_depths() {
+        // node_modules is the canonical real-world exclude. Unlike the `lowercase`
+        // fixture (one level deep), real dependency trees nest many levels, and the
+        // dir appears both at the repo root and nested under sub-packages. Every
+        // form below must be excluded; the `**/dir/**` glob has to match a
+        // ROOT-LEVEL node_modules (nothing before it) as well as nested ones.
+        let include = build_globset(&[]);
+        let exclude = build_globset(&["**/node_modules/**".to_string()]);
+
+        let excluded = [
+            "node_modules/pkg/index.js",     // root-level, one deep
+            "node_modules/pkg/lib/util.js",  // root-level, nested
+            "node_modules/.bin/tsc",         // hidden child under root
+            "sub/node_modules/dep/index.js", // nested node_modules
+            "a/b/c/node_modules/x/y/z.js",   // deeply nested
+        ];
+        for f in excluded {
+            assert!(
+                !should_include_file(Path::new(f), &include, &exclude),
+                "`{f}` should be EXCLUDED by **/node_modules/**"
+            );
+        }
+
+        // Must NOT over-match: `node_modules` only as a substring of a real path
+        // segment is a legitimate file and stays included.
+        let included = [
+            "src/node_modules_shim.rs", // substring, not a path segment
+            "src/main.rs",
+            "docs/node_modules.md", // a file literally named node_modules.md
+        ];
+        for f in included {
+            assert!(
+                should_include_file(Path::new(f), &include, &exclude),
+                "`{f}` should be INCLUDED — node_modules is only a substring here"
+            );
+        }
+    }
+
+    #[rstest]
+    fn test_exclude_bare_dir_name_matches_subtree() {
+        // A user typing `--exclude node_modules` (no glob) expects gitignore
+        // semantics: exclude that directory and everything under it, at any depth.
+        // If this fails, build_globset needs to normalize a bare dir name into the
+        // subtree-matching forms (node_modules/**, **/node_modules/**).
+        let include = build_globset(&[]);
+        let exclude = build_globset(&["node_modules".to_string()]);
+
+        for f in ["node_modules/pkg/index.js", "sub/node_modules/dep/index.js"] {
+            assert!(
+                !should_include_file(Path::new(f), &include, &exclude),
+                "`{f}` should be excluded by bare `node_modules`"
+            );
+        }
+    }
     // ~~~ Inclusion Only ~~~
     #[rstest]
     fn test_include_no_exclude_patterns(test_dir: TempDir) {

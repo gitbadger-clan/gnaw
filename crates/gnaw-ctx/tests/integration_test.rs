@@ -179,3 +179,41 @@ fn test_command_helper(basic_test_env: BasicTestEnv) {
     let output = basic_test_env.read_output();
     assert!(!output.is_empty(), "Output should not be empty");
 }
+
+#[test]
+fn exclude_node_modules_at_every_depth() {
+    use std::fs;
+    let dir = tempfile::tempdir().unwrap();
+    // root-level node_modules
+    fs::create_dir_all(dir.path().join("node_modules/pkg")).unwrap();
+    fs::write(
+        dir.path().join("node_modules/pkg/dep.js"),
+        "ROOT_DEP_CONTENT",
+    )
+    .unwrap();
+    // nested node_modules
+    fs::create_dir_all(dir.path().join("sub/node_modules/dep")).unwrap();
+    fs::write(
+        dir.path().join("sub/node_modules/dep/dep.js"),
+        "NESTED_DEP_CONTENT",
+    )
+    .unwrap();
+    // real source that must survive
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/main.rs"), "REAL_CODE").unwrap();
+
+    let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("gnaw");
+    cmd.arg(dir.path())
+        .args([
+            "--exclude",
+            "**/node_modules/**",
+            "-O",
+            "-",
+            "--no-clipboard",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("REAL_CODE")) // kept
+        .stdout(predicates::str::contains("ROOT_DEP_CONTENT").not()) // root excluded
+        .stdout(predicates::str::contains("NESTED_DEP_CONTENT").not()); // nested excluded
+}

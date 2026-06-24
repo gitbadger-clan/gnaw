@@ -51,6 +51,12 @@ impl FilterEngine {
     }
 }
 
+/// True if a path segment contains glob metacharacters. A bare *literal* name
+/// (no metachars) is expanded gitignore-style into a subtree match; a segment
+/// that's already a glob is left as a single "any depth" pattern.
+fn is_glob_segment(seg: &str) -> bool {
+    seg.contains(['*', '?', '[', ']'])
+}
 /// Constructs a `GlobSet` from a list of glob patterns.
 ///
 /// This function takes a slice of `String` patterns, attempts to convert each
@@ -80,20 +86,35 @@ pub fn build_globset(patterns: &[String]) -> GlobSet {
     }
 
     for pattern in expanded_patterns {
-        // If the pattern does not contain a '/' or the platform's separator, prepend "**/"
-        let normalized_pattern = if pattern.contains('/') {
-            pattern.trim_start_matches("./").to_string()
+        let trimmed = pattern.trim_start_matches("./");
+
+        // Decide the set of globs this pattern compiles to.
+        let normalized: Vec<String> = if trimmed.contains('/') {
+            // Already a path-ish glob — leave it exactly as written.
+            vec![trimmed.to_string()]
+        } else if is_glob_segment(trimmed) {
+            // A bare segment WITH glob metacharacters (e.g. `*.py`, `foo?.rs`):
+            // keep the existing "match at any depth" behavior — prepend **/.
+            vec![format!("**/{trimmed}")]
         } else {
-            format!("**/{}", pattern.trim_start_matches("./"))
+            // A bare, literal name (e.g. `node_modules`): gitignore semantics —
+            // match the entry itself AND its whole subtree, at root and nested.
+            vec![
+                format!("**/{trimmed}"),    // the dir/file entry, any depth
+                format!("{trimmed}/**"),    // its subtree when at the root
+                format!("**/{trimmed}/**"), // its subtree when nested
+            ]
         };
 
-        match Glob::new(&normalized_pattern) {
-            Ok(glob) => {
-                builder.add(glob);
-                debug!("✅ Glob pattern added: '{}'", normalized_pattern);
-            }
-            Err(_) => {
-                warn!("⚠️ Invalid pattern: '{}'", normalized_pattern);
+        for np in normalized {
+            match Glob::new(&np) {
+                Ok(glob) => {
+                    builder.add(glob);
+                    debug!("✅ Glob pattern added: '{}'", np);
+                }
+                Err(_) => {
+                    warn!("⚠️ Invalid pattern: '{}'", np);
+                }
             }
         }
     }
