@@ -7,6 +7,7 @@
 //! - `check-gitleaks` reports whether the vendored ruleset is behind the latest
 //!   release; exits non-zero if it is (handy locally and as a CI gate).
 
+mod bench;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -19,8 +20,15 @@ fn main() -> Result<()> {
     match args.next().as_deref() {
         Some("update-gitleaks") => update_gitleaks(args.next()),
         Some("check-gitleaks") => check_gitleaks(),
+        Some("bench-compare") => bench::compare(args),
+        Some("bench-compare-inner") => bench::compare_inner(args),
+        Some("bench-regress") => bench::regress(args),
         other => bail!(
-            "unknown task {other:?}\n  usage:\n    cargo xtask update-gitleaks [version]\n    cargo xtask check-gitleaks"
+            "unknown task {other:?}\n  usage:\n    \
+             cargo xtask update-gitleaks [version]\n    \
+             cargo xtask check-gitleaks\n    \
+             cargo xtask bench-compare [--docker] [--cpus N]\n    \
+             cargo xtask bench-regress [--against <ref>]"
         ),
     }
 }
