@@ -34,7 +34,6 @@ async fn main() -> Result<()> {
         .bin("gnaw")
         .complete(); // first line; see prior note
 
-    gnaw_core::secret_scan::warm(); // precompile regexes for secret scan
     let matches = Cli::command().get_matches();
     let args = Cli::from_arg_matches(&matches)?;
 
@@ -133,6 +132,11 @@ async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> 
     let mut session = config::build_session(Some(&config_source), &args, false)?;
     session.config.stdin_paths = stdin_paths;
 
+    // Precompile the gitleaks ruleset up-front ONLY when we'll actually scan, so
+    // `--secret-scan off` doesn't pay the ~0.4s compile it will never use.
+    if session.config.secret_scan != gnaw_core::secret_scan::SecretPolicy::Off {
+        gnaw_core::secret_scan::warm();
+    }
     // ~~~ Determine Output Behavior ~~~
     let default_output = get_default_output_destination(&config_source);
 
