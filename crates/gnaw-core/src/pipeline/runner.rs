@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::pipeline::dto::{Selection, TokenTally};
+use crate::tokenizer::TokenizerType;
 use std::time::Instant;
 
 macro_rules! report {
@@ -158,7 +159,7 @@ pub fn render_subset(
     source_tree: &str,
     root_label: &str,
     chunks: Vec<Chunk>,
-    encoding: &str,
+    encoding: TokenizerType,
 ) -> Result<Rendered, PipelineError> {
     // Rebuild the tally for just this subset — sum the per-chunk counts the
     // budgeter already stamped, and the per-path breakdown from the same.
@@ -173,7 +174,7 @@ pub fn render_subset(
         total,
         by_path,
         // ← if TokenTally carries `encoding` (or other fields), set them here.
-        encoding: encoding.to_string(),
+        encoding,
     };
 
     let selection = Selection {

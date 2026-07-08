@@ -20,13 +20,7 @@ impl TokenCounter for TiktokenCounter {
         count_tokens(text, &self.encoding)
     }
 
-    fn encoding(&self) -> &str {
-        match self.encoding {
-            TokenizerType::O200kBase => "o200k_base",
-            TokenizerType::Cl100kBase => "cl100k_base",
-            TokenizerType::P50kBase => "p50k_base",
-            TokenizerType::P50kEdit => "p50k_edit",
-            TokenizerType::R50kBase => "r50k_base",
-        }
+    fn encoding(&self) -> TokenizerType {
+        self.encoding
     }
 }

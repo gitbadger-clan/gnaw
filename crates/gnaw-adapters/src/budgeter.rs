@@ -58,7 +58,7 @@ impl Budgeter for TakeUntilBudget {
             tally: TokenTally {
                 total,
                 by_path,
-                encoding: self.counter.encoding().to_string(),
+                encoding: self.counter.encoding(),
             },
             omitted,
         }

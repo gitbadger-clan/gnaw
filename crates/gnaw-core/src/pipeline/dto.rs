@@ -2,6 +2,7 @@
 //! All are serde-serializable with stable field names.
 
 use super::*;
+use crate::tokenizer::TokenizerType;
 
 /// Raw content as it leaves a source, before chunking.
 ///
@@ -85,7 +86,15 @@ pub struct TokenTally {
     pub total: usize,
     /// path -> tokens, for the per-file breakdown CLI/REST expose.
     pub by_path: std::collections::BTreeMap<String, usize>,
-    pub encoding: String,
+    pub encoding: TokenizerType,
+}
+
+impl TokenTally {
+    /// Human-facing label. Derived ONCE, in core, from the encoding actually used.
+    /// CLI prints it, server serializes it, MCP returns it — no frontend re-derives.
+    pub fn model_info(&self) -> &'static str {
+        self.encoding.description()
+    }
 }
 
 /// What the budgeter hands the renderer: the kept chunks plus the tally.

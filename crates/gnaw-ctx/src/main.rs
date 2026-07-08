@@ -22,7 +22,7 @@ use args::Cli;
 use clap::{CommandFactory, FromArgMatches};
 use clap_complete::CompleteEnv;
 use colored::*;
-use gnaw_core::template::write_to_file;
+use gnaw_core::{template::write_to_file, tokenizer::TokenizerType};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
 use std::io::{IsTerminal, Write};
@@ -224,7 +224,7 @@ async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> 
             Some(SplitData {
                 chunks: r.chunks,
                 source_tree: r.source_tree,
-                encoding: r.tally.encoding.clone(),
+                encoding: r.tally.encoding,
             })
         } else {
             None
@@ -243,7 +243,7 @@ async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> 
         let rendered = RenderedPrompt {
             prompt: r.body,
             token_count,
-            model_info: "",
+            model_info: r.tally.model_info(),
             secret_findings: r.findings,
         };
         (rendered, token_map_files, split_data)
@@ -467,7 +467,7 @@ struct FilePart {
 struct SplitData {
     chunks: Vec<gnaw_core::pipeline::Chunk>,
     source_tree: String,
-    encoding: String,
+    encoding: TokenizerType,
 }
 
 /// Greedily packs files (in their existing, sorted order) into parts so that
@@ -578,8 +578,9 @@ fn write_split_output(
             );
         }
 
-        let rendered = render_subset(&renderer, &source_tree, &root_label, part_chunks, &encoding)
-            .map_err(|e| anyhow::anyhow!("Failed to render part {}: {}", part_no + 1, e))?;
+        let rendered =
+            render_subset(&renderer, &source_tree, &root_label, part_chunks, encoding)
+                .map_err(|e| anyhow::anyhow!("Failed to render part {}: {}", part_no + 1, e))?;
 
         let part_path = format!("{}.part{}{}", stem, part_no + 1, ext);
         gnaw_core::template::write_to_file(&part_path, &rendered.body)

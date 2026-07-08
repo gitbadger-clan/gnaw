@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::sort::FileSortMethod;
+use crate::tokenizer::TokenizerType;
 
 /// Options threaded into a source. Concrete fields land when adapters need
 /// them (refs for the commit-range source, root path for the tree source);
@@ -37,7 +38,7 @@ pub trait Chunker: Send + Sync {
 /// end, not ported — that duplication IS the bug.
 pub trait TokenCounter: Send + Sync {
     fn count(&self, text: &str) -> usize;
-    fn encoding(&self) -> &str;
+    fn encoding(&self) -> TokenizerType;
 }
 
 /// Scores a chunk for relevance. No-op (all equal) first.
