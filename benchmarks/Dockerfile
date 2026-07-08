@@ -33,7 +33,10 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 #   RUN cargo install --git https://github.com/x/yek --rev <sha> yek   # git
 #   RUN npm i -g repomix@9.1.0                            # npm/npx
 RUN echo "FILL: competitor tool install lines"
-
+# Separate prefixes — both packages ship a `repomix` binary, so a shared
+# node_modules collides. Isolate each; resolve via its own .bin shim.
+RUN npm install --prefix /build/target/bench-tools/node/repomix     repomix@VERIFY \
+ && npm install --prefix /build/target/bench-tools/node/repomix-rs  repomix-rs@VERIFY
 # --- gnaw (built from local source = the version under test) ---
 # FILL #3: confirm build-from-source vs install-released.
 WORKDIR /build

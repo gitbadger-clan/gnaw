@@ -1,57 +1,53 @@
 //! The competitor table for `bench-compare`. This is the single place where
 //! "what is fair" is encoded: how each tool is invoked so it does the SAME work
-//! as gnaw, and the asterisks for where it can't. Every field here exists
-//! because a specific confound was found during benchmarking:
+//! as gnaw, and the asterisks for where it can't. Every field exists because a
+//! specific confound was found during benchmarking:
 //!
-//! - `tokenized_cmd` forces token-mode where a tool byte-counts by default
-//!   (yek's `--tokens` — without it, yek does a `wc` and looks 10x faster).
-//! - `encoding` is pinned to o200k everywhere it can be, so "total tokens" is
-//!   comparable and not just measuring tokenizer choice.
-//! - `node_overhead` marks tools that run under Node (repomix, repomix-rs), so
-//!   their time AND peak-RSS carry a runtime tax native tools don't pay. This
-//!   is disclosed, not hidden — users really do pay it via `npx`.
-//! - `sink`/`quiet` normalize output so we time extraction, not terminal render
-//!   or clipboard.
+//! - `--tokens` forces token-mode where a tool byte-counts by default (yek —
+//!   without it, yek does a `wc` and looks 10x faster).
+//! - encoding pinned to o200k everywhere it can be. Where a tool CANNOT do o200k
+//!   (code2prompt tops out at cl100k), `token_comparable = false` so the report
+//!   knows its token TOTAL isn't rankable against the o200k tools — though its
+//!   time/memory/file-count still are.
+//! - `node_overhead` marks tools that run under Node (repomix, repomix-rs): time
+//!   AND peak-RSS carry a runtime tax native tools don't pay. Disclosed.
+//! - every tool writes to the harness-assigned `sink` so the completeness count
+//!   reads the file WE control (yek needed --output-dir/--output-name for this).
 //!
-//! Versions are PINNED and flow into the methodology report. Unpinned = a
-//! benchmark that silently drifts when upstream releases. Confirm each version
-//! and flag surface against the installed tool before trusting a run
-//! (`<tool> --version`, `<tool> --help`) — CLI surfaces churn.
+//! Versions are PINNED and flow into the methodology report. Confirm each
+//! version and flag surface against the installed tool (`<tool> --version`).
 
 use std::path::Path;
 
-/// How a tool is provisioned. `bench-setup` reads this; `bench-compare` assumes
-/// setup already ran and only resolves/records versions.
 #[derive(Clone, Copy)]
 pub enum Provision {
-    /// crates.io, pinned. Installed into target/bench-tools (not global ~/.cargo).
     Cargo {
         crate_name: &'static str,
         version: &'static str,
     },
-    /// Unreleased Rust: git repo at a pinned rev. Note "built from <repo>@<rev>"
-    /// in the report — it's reproducible but not a released version users run.
     CargoGit {
         repo: &'static str,
         rev: &'static str,
     },
-    /// npm-distributed; run via `npx <spec>`. The spec IS the pinning — no
-    /// install step. Carries Node startup in every measured run.
-    Npx { spec: &'static str },
-    /// gnaw itself: built from the local workspace at --release. The version
-    /// under test, not an installed one.
+    /// npm-installed at a pinned version into target/bench-tools/node, invoked
+    /// via the .bin shim. Pays Node startup but NOT npx resolution overhead —
+    /// the fair "as-installed" measurement. Requires a bench-setup install step.
+    Npm {
+        package: &'static str,
+        version: &'static str,
+        bin: &'static str,
+    },
+    /// npx-resolved (no install). Simpler, but each run pays npx resolution on
+    /// top of Node. Kept for tools you don't want to pre-install.
+    Npx {
+        spec: &'static str,
+    },
     LocalBuild,
 }
 
-/// Which comparison group a tool belongs in. NEVER mix these in one ranking:
-/// tokenized vs byte-counted are different work.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Group {
-    /// Real BPE tokenization (o200k where possible). gnaw, code2prompt,
-    /// repomix-rs, Node repomix.
     Tokenized,
-    /// Byte/char counting only. A tool lands here if it CANNOT be forced to
-    /// tokenize with a comparable encoding.
     ByteCount,
 }
 
@@ -59,21 +55,23 @@ pub struct Tool {
     pub name: &'static str,
     pub provision: Provision,
     pub group: Group,
-    /// True if the tool runs under Node → time and peak-RSS include runtime
-    /// baseline. Surfaced as an asterisk in the report.
+    /// Runs under Node → time and peak-RSS include runtime baseline.
     pub node_overhead: bool,
-    /// Builds the argv for a normalized run against `repo`, writing to `sink`.
-    /// `bin` is the resolved executable (from target/bench-tools/bin or PATH);
-    /// for Npx tools it's "npx" and the spec is prepended in the builder.
+    /// True if this tool's token TOTAL is on the same encoding (o200k) as the
+    /// reference set. False = its token column carries a footnote and can't be
+    /// ranked against o200k tools (e.g. code2prompt is cl100k-max). Time,
+    /// memory, and file count remain comparable regardless.
+    pub token_comparable: bool,
+    /// True if this tool performs secret scanning (for `bench-secret`).
+    pub scans_secrets: bool,
+    /// argv for a normalized EXTRACTION run (scanning off where the tool allows).
     pub build_cmd: fn(bin: &str, repo: &Path, sink: &Path) -> Vec<String>,
-    /// After a run, counts files the tool actually emitted, by parsing its
-    /// output at `sink`. This is the completeness check that separates "faster"
-    /// from "did less" — the whole reason the yek result became trustworthy.
-    /// Returns None if the tool's output format isn't parseable for counts.
+    /// argv for a SCANNING-ON run, if the tool scans. None otherwise.
+    pub build_scan_cmd: Option<fn(bin: &str, repo: &Path, sink: &Path) -> Vec<String>>,
+    /// Counts files the tool emitted, by parsing `sink`.
     pub count_files: fn(sink: &Path) -> Option<usize>,
 }
 
-/// The field. Order is report order. Keep gnaw first.
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool {
@@ -81,11 +79,9 @@ pub fn tools() -> Vec<Tool> {
             provision: Provision::LocalBuild,
             group: Group::Tokenized,
             node_overhead: false,
+            token_comparable: true, // o200k
+            scans_secrets: true,    // gitleaks
             build_cmd: |bin, repo, sink| {
-                // --secret-scan off = the extraction-speed number (fair vs tools
-                // that don't scan). The WITH-scanning number is a separate run;
-                // don't fold the scanner tax into the head-to-head speed claim.
-                // o200k matches the other tiktoken tools.
                 vec![
                     bin.into(),
                     repo.display().to_string(),
@@ -93,109 +89,160 @@ pub fn tools() -> Vec<Tool> {
                     "o200k".into(),
                     "--secret-scan".into(),
                     "off".into(),
+                    "--output-format".into(),
+                    "xml".into(),
                     "--quiet".into(),
                     "-O".into(),
                     sink.display().to_string(),
                 ]
             },
-            count_files: |sink| {
-                count_matches(sink, |l| {
-                    // gnaw XML: one structural `</file>` per file, on its own line.
-                    // Anchored so a `</file>` inside bundled content doesn't count.
-                    l.trim() == "</file>"
-                })
-            },
+            build_scan_cmd: Some(|bin, repo, sink| {
+                vec![
+                    bin.into(),
+                    repo.display().to_string(),
+                    "--encoding".into(),
+                    "o200k".into(),
+                    "--secret-scan".into(),
+                    "warn".into(),
+                    "--output-format".into(),
+                    "xml".into(),
+                    "--quiet".into(),
+                    "-O".into(),
+                    sink.display().to_string(),
+                ]
+            }),
+            count_files: |sink| count_matches(sink, |l| l.trim() == "</file>"),
         },
         Tool {
             name: "code2prompt",
             provision: Provision::Cargo {
                 crate_name: "code2prompt",
-                version: "VERIFY",
+                version: "4.3.0",
             },
             group: Group::Tokenized,
             node_overhead: false,
-            // Fairest comparison: gnaw's fork ancestor, native, tiktoken.
-            // VERIFY its flags: output-to-file/stdout, quiet, and the encoding
-            // flag (must be pinnable to o200k). Fill once `code2prompt --help`
-            // is confirmed — do NOT guess, a wrong flag benchmarks a degraded
-            // mode.
-            build_cmd: |_bin, _repo, _sink| {
-                vec!["TODO: code2prompt argv — confirm via --help".into()]
+            token_comparable: true, // accepts o200k at runtime (help understates it)
+            scans_secrets: false,
+            build_cmd: |bin, repo, sink| {
+                vec![
+                    bin.into(),
+                    repo.display().to_string(),
+                    "-O".into(),
+                    sink.display().to_string(),
+                    "-F".into(),
+                    "xml".into(),
+                    "--encoding".into(),
+                    "o200k".into(), // was cl100k — runtime accepts o200k
+                    "--quiet".into(),
+                ]
             },
-            count_files: |_sink| None, // fill once output format confirmed
+            build_scan_cmd: None,
+            count_files: |sink| count_matches(sink, |l| l.trim_start().starts_with("<file")),
         },
         Tool {
             name: "yek",
-            // TWO repos exist (bodo-run vs mohsen1). Resolve the maintained one
-            // before pinning; they have separate release streams.
             provision: Provision::CargoGit {
                 repo: "mohsen1/yek",
-                rev: "VERIFY",
+                rev: "0.25.5",
             },
             group: Group::Tokenized,
             node_overhead: false,
-            build_cmd: |bin, repo, _sink| {
-                // --tokens is MANDATORY. Without it yek byte-counts and the
-                // comparison is meaningless. Budget set larger than the repo so
-                // it processes everything (matching gnaw's whole-repo run), not
-                // a budget-clipped subset. yek streams to a temp file and prints
-                // the path; sink is handled by reading that path post-run.
+            // yek's --tokens uses its own counter; whether it's o200k is
+            // unconfirmed. Assume NOT comparable until verified.
+            token_comparable: false,
+            scans_secrets: false,
+            build_cmd: |bin, repo, sink| {
+                let dir = sink.parent().unwrap_or_else(|| Path::new("."));
+                let name = sink
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("yek.out");
                 vec![
                     bin.into(),
                     repo.display().to_string(),
                     "--tokens".into(),
                     "16000k".into(),
+                    "--output-dir".into(),
+                    dir.display().to_string(),
+                    "--output-name".into(),
+                    name.into(),
                 ]
             },
-            count_files: |_sink| None, // yek: count `^>>>> ` headers in its temp output
+            build_scan_cmd: None,
+            count_files: |sink| count_matches(sink, |l| l.starts_with(">>>> ")),
         },
         Tool {
             name: "repomix-rs",
-            provision: Provision::Npx {
-                spec: "repomix-rs@VERIFY",
-            },
-            group: Group::Tokenized,
-            node_overhead: true, // Rust core but npm-distributed → Node startup
-            // Claims o200k_base — match it so tokens are comparable. VERIFY its
-            // flags (stdout/output, quiet) and that compression is OFF for a
-            // raw-vs-raw compare (compression = different work).
-            build_cmd: |_bin, _repo, _sink| {
-                vec!["TODO: npx repomix-rs argv — confirm via --help".into()]
-            },
-            count_files: |_sink| None,
-        },
-        Tool {
-            name: "repomix",
-            provision: Provision::Npx {
-                spec: "repomix@VERIFY",
+            // repomix-rs (Rust reimplementation — ships a `repomix` binary, own prefix)
+            provision: Provision::Npm {
+                package: "repomix-rs",
+                version: "2.0.1",
+                bin: "repomix", // NOT "repomix-rs" — verify with: ls .../repomix-rs/node_modules/.bin
             },
             group: Group::Tokenized,
             node_overhead: true,
-            // The reference baseline everyone knows. Node startup asterisk.
-            // --stdout to sink, --quiet, and compression OFF (default `repomix`
-            // does NOT compress unless --compress, so default is fine for raw).
+            token_comparable: true, // claims o200k_base — verify via token total
+            scans_secrets: false,
+            build_cmd: |_bin, repo, sink| {
+                vec![
+                    "npx".into(),
+                    "repomix-rs@VERIFY".into(),
+                    repo.display().to_string(),
+                    "--output".into(),
+                    sink.display().to_string(),
+                    "--style".into(),
+                    "xml".into(),
+                ]
+            },
+            build_scan_cmd: None,
+            count_files: |sink| count_matches(sink, |l| l.trim_start().starts_with("<file path=")),
+        },
+        Tool {
+            name: "repomix",
+            // repomix (Node original)
+            provision: Provision::Npm {
+                package: "repomix",
+                version: "1.16.0",
+                bin: "repomix",
+            },
+            group: Group::Tokenized,
+            node_overhead: true,
+            token_comparable: true, // --token-count-encoding o200k_base
+            scans_secrets: true,    // Secretlint, on by default
             build_cmd: |_bin, repo, sink| {
                 vec![
                     "npx".into(),
                     "repomix@VERIFY".into(),
                     repo.display().to_string(),
-                    "--stdout".into(),
-                    "--quiet".into(),
-                    // redirect handled by caller; repomix --stdout writes stdout
                     "--output".into(),
                     sink.display().to_string(),
+                    "--style".into(),
+                    "xml".into(),
+                    "--token-count-encoding".into(),
+                    "o200k_base".into(),
+                    "--no-security-check".into(),
+                    "--quiet".into(),
                 ]
             },
-            count_files: |_sink| None, // repomix XML: count `<file path=` structural tags
+            build_scan_cmd: Some(|_bin, repo, sink| {
+                vec![
+                    "npx".into(),
+                    "repomix@VERIFY".into(),
+                    repo.display().to_string(),
+                    "--output".into(),
+                    sink.display().to_string(),
+                    "--style".into(),
+                    "xml".into(),
+                    "--token-count-encoding".into(),
+                    "o200k_base".into(),
+                    "--quiet".into(),
+                ]
+            }),
+            count_files: |sink| count_matches(sink, |l| l.trim_start().starts_with("<file path=")),
         },
-        // Go repomix (StevenACoffman) deliberately OMITTED from the primary
-        // table: needs the Go toolchain (won't build in the Rust bench image),
-        // and its value axis barely overlaps. If wanted, add as a "completeness"
-        // tier data point, not a headline comparison.
     ]
 }
 
-/// Count lines in the sink matching a predicate. Small files; read to string.
 fn count_matches(sink: &Path, pred: fn(&str) -> bool) -> Option<usize> {
     let text = std::fs::read_to_string(sink).ok()?;
     Some(text.lines().filter(|l| pred(l)).count())

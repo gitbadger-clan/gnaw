@@ -324,6 +324,14 @@ fn resolve_exec(t: &Tool, gnaw_bin: Option<&Path>, root: &Path) -> Option<String
             Some(b) => Some(b.display().to_string()), // host: local build
             None => which::which("gnaw").ok().map(|p| p.display().to_string()), // container: PATH
         },
+        Provision::Npm { package, bin, .. } => {
+            let shim = root
+                .join("target/bench-tools/node")
+                .join(package) // per-package prefix
+                .join("node_modules/.bin")
+                .join(bin); // the actual bin name (may != package)
+            shim.exists().then(|| shim.display().to_string())
+        }
         Provision::Npx { .. } => which::which("npx").ok().map(|p| p.display().to_string()),
         Provision::Cargo { crate_name, .. } => {
             let local = root.join("target/bench-tools/bin").join(crate_name);
@@ -350,6 +358,9 @@ fn resolve_version(p: &Provision) -> String {
     match p {
         Provision::Cargo { version, .. } => (*version).into(),
         Provision::CargoGit { rev, .. } => format!("git:{rev}"),
+        Provision::Npm {
+            package, version, ..
+        } => format!("{package}@{version}"),
         Provision::Npx { spec } => (*spec).into(),
         Provision::LocalBuild => "local".into(),
     }
