@@ -325,11 +325,13 @@ fn resolve_exec(t: &Tool, gnaw_bin: Option<&Path>, root: &Path) -> Option<String
             None => which::which("gnaw").ok().map(|p| p.display().to_string()), // container: PATH
         },
         Provision::Npm { package, bin, .. } => {
-            let shim = root
-                .join("target/bench-tools/node")
-                .join(package) // per-package prefix
+            let base = std::env::var("BENCH_TOOLS_DIR")
+                .unwrap_or_else(|_| root.join("target/bench-tools").display().to_string());
+            let shim = Path::new(&base)
+                .join("node")
+                .join(package)
                 .join("node_modules/.bin")
-                .join(bin); // the actual bin name (may != package)
+                .join(bin);
             shim.exists().then(|| shim.display().to_string())
         }
         Provision::Npx { .. } => which::which("npx").ok().map(|p| p.display().to_string()),

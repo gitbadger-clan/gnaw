@@ -183,10 +183,9 @@ pub fn tools() -> Vec<Tool> {
             node_overhead: true,
             token_comparable: true, // claims o200k_base — verify via token total
             scans_secrets: false,
-            build_cmd: |_bin, repo, sink| {
+            build_cmd: |bin, repo, sink| {
                 vec![
-                    "npx".into(),
-                    "repomix-rs@VERIFY".into(),
+                    bin.into(), // resolved .bin shim, NOT "npx repomix-rs@VERIFY"
                     repo.display().to_string(),
                     "--output".into(),
                     sink.display().to_string(),
@@ -199,7 +198,6 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "repomix",
-            // repomix (Node original)
             provision: Provision::Npm {
                 package: "repomix",
                 version: "1.16.0",
@@ -207,12 +205,12 @@ pub fn tools() -> Vec<Tool> {
             },
             group: Group::Tokenized,
             node_overhead: true,
-            token_comparable: true, // --token-count-encoding o200k_base
-            scans_secrets: true,    // Secretlint, on by default
-            build_cmd: |_bin, repo, sink| {
+            token_comparable: true,
+            scans_secrets: true,
+            build_cmd: |bin, repo, sink| {
+                // was |_bin, ...|
                 vec![
-                    "npx".into(),
-                    "repomix@VERIFY".into(),
+                    bin.into(), // resolved .bin shim, NOT "npx"
                     repo.display().to_string(),
                     "--output".into(),
                     sink.display().to_string(),
@@ -224,10 +222,10 @@ pub fn tools() -> Vec<Tool> {
                     "--quiet".into(),
                 ]
             },
-            build_scan_cmd: Some(|_bin, repo, sink| {
+            build_scan_cmd: Some(|bin, repo, sink| {
+                // was |_bin, ...|
                 vec![
-                    "npx".into(),
-                    "repomix@VERIFY".into(),
+                    bin.into(),
                     repo.display().to_string(),
                     "--output".into(),
                     sink.display().to_string(),

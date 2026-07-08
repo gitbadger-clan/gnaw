@@ -1,0 +1,7 @@
+# .dockerignore — keep local build artifacts OUT of the Docker context.
+target/
+**/target/
+.git/
+node_modules/
+**/node_modules/
+*.log
