@@ -173,19 +173,26 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             name: "repomix-rs",
-            // repomix-rs (Rust reimplementation — ships a `repomix` binary, own prefix)
-            provision: Provision::Npm {
-                package: "repomix-rs",
-                version: "2.0.1",
-                bin: "repomix", // NOT "repomix-rs" — verify with: ls .../repomix-rs/node_modules/.bin
+            // Built from source in the builder stage (no arm64 npm prebuilt), copied
+            // into the final image as /usr/local/bin/repomix-rs. Native Rust binary now
+            // — a fair Rust-vs-Rust row, not an npm/Node-wrapped one. rev MUST match the
+            // Dockerfile's `cargo install --git ... --rev`.
+            provision: Provision::CargoGit {
+                repo: "sopaco/repomix-rs",
+                rev: "5798dc0ffb79b3b99b3781040f844d56e9bb36ef",
             },
             group: Group::Tokenized,
-            node_overhead: true,
-            token_comparable: true, // claims o200k_base — verify via token total
+            node_overhead: false, // native binary — no Node startup asterisk
+            // No `--token-count-encoding` flag exists; it hardcodes its tokenizer.
+            // Assumed o200k_base — confirm via the token total before trusting the row.
+            token_comparable: true,
             scans_secrets: false,
             build_cmd: |bin, repo, sink| {
+                // Positional `root` = dir to pack. --style xml is the default but kept
+                // explicit for the record. --compress stays OFF (tree-sitter compression
+                // = different work; raw-vs-raw only).
                 vec![
-                    bin.into(), // resolved .bin shim, NOT "npx repomix-rs@VERIFY"
+                    bin.into(),
                     repo.display().to_string(),
                     "--output".into(),
                     sink.display().to_string(),

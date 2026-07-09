@@ -23,9 +23,22 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup toolchain install ${RUST_VERSION} \
     && rustup default ${RUST_VERSION}
 
+# Normalize release build flags across ALL Rust tools (gnaw + competitors) so
+# measured deltas reflect algorithms, not build config. Anchored to gnaw's
+# shipping profile. panic is deliberately NOT normalized: forcing abort onto
+# crates that may rely on unwinding is risky, and its throughput effect is noise.
+ENV CARGO_PROFILE_RELEASE_LTO=thin \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
 # --- Rust competitors (pinned), into ~/.cargo/bin. Cache cleaned same layer. ---
 RUN cargo install --version 4.3.0 code2prompt \
     && cargo install --git https://github.com/mohsen1/yek --rev v0.25.5 yek \
+    && rm -rf /root/.cargo/git /root/.cargo/registry
+
+RUN cargo install --git https://github.com/sopaco/repomix-rs \
+        --rev 5798dc0ffb79b3b99b3781040f844d56e9bb36ef \
+        --root /opt/bench-tools/repomix-rs-src \
+        repomix-cli \
     && rm -rf /root/.cargo/git /root/.cargo/registry
 
 # --- gnaw + xtask (built from local source = the versions under test) ---
@@ -66,13 +79,13 @@ COPY --from=builder /build/target/release/gnaw   /usr/local/bin/gnaw
 COPY --from=builder /build/target/release/xtask  /usr/local/bin/xtask
 COPY --from=builder /root/.cargo/bin/code2prompt /usr/local/bin/code2prompt
 COPY --from=builder /root/.cargo/bin/yek         /usr/local/bin/yek
+COPY --from=builder /opt/bench-tools/repomix-rs-src/bin/repomix /usr/local/bin/repomix-rs
 
 # --- npm competitors (pinned). MUST be in the final stage: they're
 # node_modules trees that need Node to run, not liftable binaries. Separate
 # prefixes — both packages ship a `repomix` binary and would collide in a
 # shared node_modules. resolve_exec finds them via each prefix's .bin shim.
-RUN npm install --prefix /opt/bench-tools/node/repomix     repomix@1.16.0 \
- && npm install --prefix /opt/bench-tools/node/repomix-rs  repomix-rs@2.0.1
+RUN npm install --prefix /opt/bench-tools/node/repomix     repomix@1.16.0
 
 # --- Corpus (shallow-ish, pinned, history dropped for size) ---
 ARG CORPUS_REPO=https://github.com/vercel/next.js
