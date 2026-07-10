@@ -482,4 +482,18 @@ mod tests {
         let s = GitleaksScanner::load_default();
         assert!(s.scan("key = AKIAIOSFODNN7EXAMPLE").is_empty());
     }
+
+    #[test]
+    fn report_dropped_rules() {
+        // Diagnostic (not an assertion): the loader counts drops but doesn't name
+        // them. Run with --nocapture to see which rules Rust's regex rejects.
+        let cfg: RawConfig = toml::from_str(GITLEAKS_TOML).expect("parse");
+        let dropped: Vec<_> = cfg
+            .rules
+            .into_iter()
+            .filter(|r| !r.regex.trim().is_empty() && compile_pattern(&r.regex).is_err())
+            .map(|r| r.id)
+            .collect();
+        eprintln!("DROPPED {} rules: {dropped:#?}", dropped.len());
+    }
 }
