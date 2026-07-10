@@ -389,6 +389,11 @@ impl GitleaksScanner {
         {
             return true;
         }
+        // gnaw value-allowlist: always tested against the secret value, even when
+        // `allow_targets_match` routes the vendored `allow_res` at the whole match.
+        if rule.value_allow_res.iter().any(|re| re.is_match(secret)) {
+            return true;
+        }
         if self.global_allow_res.iter().any(|re| re.is_match(secret)) {
             return true;
         }
@@ -411,8 +416,7 @@ impl SecretScanner for GitleaksScanner {
                 continue;
             }
             if rule.whole_match {
-                // Common case: the whole match is the secret. `find_iter` skips
-                // capture-group tracking that `captures_iter` would pay for.
+                // Whole match is the secret: find_iter (lazy-DFA), no capture tracking.
                 for m in rule.re.find_iter(content) {
                     let secret = m.as_str();
                     let entropy = shannon_entropy(secret);
