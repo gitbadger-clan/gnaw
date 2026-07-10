@@ -105,6 +105,10 @@ struct CompiledRule {
     stopwords: Vec<String>,
     /// When true, `allow_res` test the whole match instead of just the secret.
     allow_targets_match: bool,
+    /// gnaw override: allowlist regexes ALWAYS tested against the secret value,
+    /// regardless of `allow_targets_match`. Used to suppress hash/UUID-shaped
+    /// values on value-targeted rules (see `gnaw_override`).
+    value_allow_res: Vec<Regex>,
 }
 
 pub struct GitleaksScanner {
@@ -131,6 +135,43 @@ fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
         .size_limit(50 * (1 << 20)) // 50 MiB program (default ~10 MiB)
         .dfa_size_limit(50 * (1 << 20))
         .build()
+}
+
+/// gnaw-specific overrides layered on top of the vendored gitleaks rules, so
+/// they survive `cargo xtask update-gitleaks` (they live in code, not the TOML).
+///
+/// generic-api-key ships with no secretGroup, so gitleaks treats the WHOLE match
+/// as the secret and its ~1.4k stopwords suppress by variable NAME — silently
+/// dropping access_token / auth_token / password / client_secret / … (gitleaks
+/// itself misses these). We set secretGroup=1 so stopwords test the VALUE, which
+/// recovers those families. The cost is that a high-entropy hash in a
+/// credential-named var now looks like a secret; `value_allow_res` suppresses
+/// the hash/UUID shapes that cause it. Accepted residual: a real secret that is
+/// itself pure-hex-of-hash-length or UUID-shaped gets allowlisted.
+struct RuleOverride {
+    secret_group: Option<usize>,
+    value_allow_res: Vec<Regex>,
+}
+
+fn gnaw_override(id: &str) -> Option<RuleOverride> {
+    if id != "generic-api-key" {
+        return None;
+    }
+    // Anchored to the whole value: a token that merely CONTAINS hex isn't hit.
+    let value_allow_res = [
+        r"^[a-fA-F0-9]{32}$", // md5
+        r"^[a-fA-F0-9]{40}$", // sha1 / git sha
+        r"^[a-fA-F0-9]{64}$", // sha256
+        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", // uuid
+        r"^sha(?:256|512)-[A-Za-z0-9+/]+={0,2}$", // subresource-integrity hash
+    ]
+    .iter()
+    .map(|p| compile_pattern(p).expect("builtin gnaw value-allowlist regex"))
+    .collect();
+    Some(RuleOverride {
+        secret_group: Some(1),
+        value_allow_res,
+    })
 }
 
 impl GitleaksScanner {
@@ -245,15 +286,23 @@ impl GitleaksScanner {
                 }
             }
 
+            let ov = gnaw_override(&prep.id);
+            let secret_group = ov
+                .as_ref()
+                .and_then(|o| o.secret_group)
+                .unwrap_or(prep.secret_group);
+            let value_allow_res = ov.map(|o| o.value_allow_res).unwrap_or_default();
+
             rules.push(CompiledRule {
                 id: Box::leak(prep.id.into_boxed_str()),
-                whole_match: prep.secret_group == 0,
+                whole_match: secret_group == 0,
                 re: prep.re,
-                secret_group: prep.secret_group,
+                secret_group,
                 min_entropy: prep.min_entropy,
                 allow_res: prep.allow_res,
                 stopwords: prep.stopwords,
                 allow_targets_match: prep.allow_targets_match,
+                value_allow_res,
             });
         }
 
@@ -381,20 +430,33 @@ impl SecretScanner for GitleaksScanner {
                     });
                 }
             } else {
-                for caps in rule.re.captures_iter(content) {
-                    let whole = caps.get(0).unwrap();
-                    let target = caps.get(rule.secret_group).unwrap_or(whole);
-                    let secret = target.as_str();
+                // Capture-group secret. Locate matches with the fast find_iter
+                // engine, then resolve the group per-match. Using captures_iter
+                // here drives the capture-tracking engine over the WHOLE file,
+                // which makes the huge generic-api-key pattern (secretGroup=1) take
+                // tens of seconds on large inputs. captures_read_at with the full
+                // `content` keeps anchor/boundary context (\b, ^, $) correct.
+                let mut locs = rule.re.capture_locations();
+                for m in rule.re.find_iter(content) {
+                    if rule
+                        .re
+                        .captures_read_at(&mut locs, content, m.start())
+                        .is_none()
+                    {
+                        continue;
+                    }
+                    let (gs, ge) = locs.get(rule.secret_group).unwrap_or((m.start(), m.end()));
+                    let secret = &content[gs..ge];
                     let entropy = shannon_entropy(secret);
                     if rule.min_entropy > 0.0 && entropy < rule.min_entropy {
                         continue;
                     }
-                    if self.allowed(rule, secret, whole.as_str()) {
+                    if self.allowed(rule, secret, m.as_str()) {
                         continue;
                     }
                     findings.push(Finding {
                         rule_id: rule.id,
-                        line: line_of(content, target.start()),
+                        line: line_of(content, gs),
                         entropy,
                         preview: redact_preview(secret),
                     });
