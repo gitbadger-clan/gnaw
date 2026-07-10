@@ -94,7 +94,7 @@ fn overlapping_rules_all_report() {
 /// generic assignment catch-all.
 #[rstest]
 fn bare_prefixed_token_matches_specific_rule() {
-    let env = env_with_secret(&format!("# token: {FAKE_PAT}"));
+    let env = env_with_secret(&format!("# {FAKE_PAT}"));
     let mut cmd = assert_cmd::cargo::cargo_bin_cmd!("gnaw");
     cmd.arg(env.path())
         .args(["-O", "-", "--no-clipboard", "--secret-scan", "warn"])
