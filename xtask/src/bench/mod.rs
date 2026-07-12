@@ -14,14 +14,17 @@
 //! `compare::measure_and_report` (the single measurement core both the host and
 //! container paths call, so the fairness rules can't drift).
 
+mod analyze;
 mod compare;
 mod docker;
 mod regress;
+mod report;
 mod tools;
 
 use std::path::Path;
 
-pub use compare::{compare, compare_inner};
+pub use analyze::analyze;
+pub use compare::{compare, compare_inner, secret, secret_inner};
 pub use regress::regress;
 
 /// Locate the workspace root from xtask's manifest dir (xtask is one level down).
