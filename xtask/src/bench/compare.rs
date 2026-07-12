@@ -24,6 +24,7 @@ use anyhow::{Context, Result, bail, ensure};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use super::report::{BenchMeta, BenchReport, BenchRow};
 use super::tools::{self, Group, Provision, Tool};
 
 /// One tool's merged row, ready to print.
@@ -34,9 +35,29 @@ struct Row {
     node_overhead: bool,
     mean_ms: Option<f64>,     // from hyperfine
     stddev_ms: Option<f64>,   // from hyperfine
+    min_ms: Option<f64>,      // from hyperfine
+    max_ms: Option<f64>,      // from hyperfine
     peak_rss_kb: Option<u64>, // from /usr/bin/time max over runs
     cpu_ratio: Option<f64>,   // (usr+sys)/wall; >1 ⇒ multi-core
     files: Option<usize>,     // completeness: what it actually emitted
+}
+
+/// Which argv a tool runs for a measurement pass. Extraction = the normalized
+/// "scanning off where allowed" run; Scanning = "scanning on", and only tools
+/// that scan (build_scan_cmd = Some) participate.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pass {
+    Extraction,
+    Scanning,
+}
+
+/// argv for `t` in `pass`. None ⇒ the tool doesn't do this pass (a non-scanning
+/// tool under Scanning) and is filtered out before we get here.
+fn pass_argv(t: &Tool, pass: Pass, bin: &str, repo: &Path, sink: &Path) -> Option<Vec<String>> {
+    match pass {
+        Pass::Extraction => Some((t.build_cmd)(bin, repo, sink)),
+        Pass::Scanning => t.build_scan_cmd.map(|f| f(bin, repo, sink)),
+    }
 }
 
 /// Host entry point: `cargo xtask bench-compare [--repo <p> | --docker ...]`.
@@ -101,7 +122,14 @@ pub fn compare(mut args: impl Iterator<Item = String>) -> Result<()> {
         gnaw_bin.display()
     );
 
-    measure_and_report(&repo, resource_runs, Some(&gnaw_bin), &root)
+    measure_and_report(
+        &repo,
+        resource_runs,
+        Some(&gnaw_bin),
+        &root,
+        None,
+        Pass::Extraction,
+    )
 }
 
 /// Container entry point: `xtask bench-compare-inner --repo /corpus --out /out`.
@@ -126,15 +154,95 @@ pub fn compare_inner(mut args: impl Iterator<Item = String>) -> Result<()> {
         }
     }
     let repo = repo.context("bench-compare-inner needs --repo (the baked corpus, e.g. /corpus)")?;
-    // `out` is where a machine-readable artifact could be written for the host
-    // to extract; the table is streamed to stdout regardless. Reserved for the
-    // report.txt/JSON dump when you want the artifact.
-    let _out = out;
 
     // gnaw_bin: None → resolve gnaw from PATH. root is unused for PATH tools but
     // required by the signature; workspace_root() is harmless in-container.
     let root = super::workspace_root();
-    measure_and_report(&repo, resource_runs, None, &root)
+    measure_and_report(
+        &repo,
+        resource_runs,
+        None,
+        &root,
+        out.as_deref(),
+        Pass::Extraction,
+    )
+}
+
+/// `cargo xtask bench-secret --repo <p> [--out <p>]` — scanning-ON speed + memory
+/// for the tools that scan (gnaw, repomix, repomix-rs). Same core as bench-compare.
+pub fn secret(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let mut repo: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut resource_runs = 5usize;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--repo" => repo = Some(PathBuf::from(args.next().context("--repo needs a path")?)),
+            "--out" => out = Some(PathBuf::from(args.next().context("--out needs a path")?)),
+            "--resource-runs" => {
+                resource_runs = args
+                    .next()
+                    .context("--resource-runs needs a number")?
+                    .parse()
+                    .context("--resource-runs must be an integer")?;
+            }
+            other => bail!("unknown bench-secret arg {other:?}"),
+        }
+    }
+    let repo = repo.context("bench-secret needs --repo <path> (a checkout at a pinned commit)")?;
+    ensure!(
+        repo.is_dir(),
+        "corpus path {} is not a directory",
+        repo.display()
+    );
+
+    build_gnaw_release()?;
+    let root = super::workspace_root();
+    let gnaw_bin = root.join("target/release/gnaw");
+    ensure!(
+        gnaw_bin.exists(),
+        "gnaw release binary missing at {}",
+        gnaw_bin.display()
+    );
+
+    measure_and_report(
+        &repo,
+        resource_runs,
+        Some(&gnaw_bin),
+        &root,
+        out.as_deref(),
+        Pass::Scanning,
+    )
+}
+
+/// Container entry: `xtask bench-secret-inner --repo /corpus [--out /out]`.
+pub fn secret_inner(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let mut repo: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    let mut resource_runs = 5usize;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--repo" => repo = Some(PathBuf::from(args.next().context("--repo needs a path")?)),
+            "--out" => out = Some(PathBuf::from(args.next().context("--out needs a path")?)),
+            "--resource-runs" => {
+                resource_runs = args
+                    .next()
+                    .context("--resource-runs needs a number")?
+                    .parse()
+                    .context("--resource-runs must be an integer")?;
+            }
+            other => bail!("unknown bench-secret-inner arg {other:?}"),
+        }
+    }
+    let repo = repo.context("bench-secret-inner needs --repo (the baked corpus, e.g. /corpus)")?;
+    let root = super::workspace_root();
+    measure_and_report(
+        &repo,
+        resource_runs,
+        None,
+        &root,
+        out.as_deref(),
+        Pass::Scanning,
+    )
 }
 
 /// The shared measurement core: two passes + merge + report. Called by both the
@@ -145,6 +253,8 @@ fn measure_and_report(
     resource_runs: usize,
     gnaw_bin: Option<&Path>,
     root: &Path,
+    out: Option<&Path>,
+    pass: Pass,
 ) -> Result<()> {
     // The measurement tools must exist. GNU time is Linux (/usr/bin/time);
     // macOS ships BSD time with different flags — run the comparison in the
@@ -166,6 +276,9 @@ fn measure_and_report(
     // a contributor won't have all of them, and that must degrade gracefully.
     let mut resolved: Vec<(Tool, String, PathBuf)> = Vec::new();
     for t in all {
+        if pass == Pass::Scanning && !t.scans_secrets {
+            continue; // doesn't scan → not part of the secret pass
+        }
         let sink = sink_dir.join(format!("{}.out", t.name));
         let exec = match resolve_exec(&t, gnaw_bin, root) {
             Some(e) => e,
@@ -186,13 +299,14 @@ fn measure_and_report(
 
     // ---- PASS 1: TIMING via hyperfine (all tools, one invocation) ----
     let hf_json = sink_dir.join("timing.json");
-    run_hyperfine(&resolved, repo, &hf_json)?;
+    run_hyperfine(&resolved, repo, &hf_json, pass)?;
     let timing = parse_hyperfine(&hf_json)?; // name → (mean_ms, stddev_ms)
 
     // ---- PASS 2: RESOURCE via /usr/bin/time (separate, per tool) ----
     let mut resource: std::collections::HashMap<String, (u64, f64)> = Default::default();
     for (t, exec, sink) in &resolved {
-        let argv = (t.build_cmd)(exec, repo, sink);
+        let argv =
+            pass_argv(t, pass, exec, repo, sink).expect("resolved tool has an argv for this pass");
         let (peak_kb, ratio) = measure_resource(&argv, resource_runs)
             .with_context(|| format!("resource pass for {}", t.name))?;
         resource.insert(t.name.to_string(), (peak_kb, ratio));
@@ -201,10 +315,10 @@ fn measure_and_report(
     // ---- MERGE + completeness ----
     let mut rows: Vec<Row> = Vec::new();
     for (t, _exec, sink) in &resolved {
-        let (mean_ms, stddev_ms) = timing
+        let (mean_ms, stddev_ms, min_ms, max_ms) = timing
             .get(t.name)
-            .map(|&(m, s)| (Some(m), Some(s)))
-            .unwrap_or((None, None));
+            .map(|&(m, s, lo, hi)| (Some(m), Some(s), Some(lo), Some(hi)))
+            .unwrap_or((None, None, None, None));
         let (peak, ratio) = resource
             .get(t.name)
             .map(|&(p, r)| (Some(p), Some(r)))
@@ -216,34 +330,70 @@ fn measure_and_report(
             node_overhead: t.node_overhead,
             mean_ms,
             stddev_ms,
+            min_ms,
+            max_ms,
             peak_rss_kb: peak,
             cpu_ratio: ratio,
             files: (t.count_files)(sink),
         });
     }
 
-    print_report(&rows, repo);
+    print_report(&rows, repo, pass);
+    if let Some(out) = out {
+        let report = BenchReport {
+            meta: BenchMeta {
+                corpus: repo.display().to_string(),
+                resource_runs,
+                image: std::env::var("GNAW_BENCH_IMAGE").ok(),
+                cpus: std::env::var("GNAW_BENCH_CPUS").ok(),
+                memory: std::env::var("GNAW_BENCH_MEMORY").ok(),
+                created: None,
+            },
+            rows: rows
+                .iter()
+                .map(|r| BenchRow {
+                    name: r.name.clone(),
+                    version: r.version.clone(),
+                    node_overhead: r.node_overhead,
+                    mean_ms: r.mean_ms,
+                    stddev_ms: r.stddev_ms,
+                    min_ms: r.min_ms,
+                    max_ms: r.max_ms,
+                    peak_rss_kb: r.peak_rss_kb,
+                    cpu_ratio: r.cpu_ratio,
+                    files: r.files,
+                })
+                .collect(),
+        };
+        std::fs::write(out, serde_json::to_string_pretty(&report)?)
+            .with_context(|| format!("writing bench report {}", out.display()))?;
+    }
     Ok(())
 }
 
 /// hyperfine drives all tools at once so warmup/cache state is shared.
-fn run_hyperfine(resolved: &[(Tool, String, PathBuf)], repo: &Path, out_json: &Path) -> Result<()> {
+fn run_hyperfine(
+    resolved: &[(Tool, String, PathBuf)],
+    repo: &Path,
+    out_json: &Path,
+    pass: Pass,
+) -> Result<()> {
     let mut cmd = Command::new("hyperfine");
     cmd.arg("--warmup")
         .arg("3")
         .arg("--export-json")
         .arg(out_json);
-    // Prime any npx package download once so the fetch never lands in a timed
-    // run (repomix / repomix-rs). One --setup per npx tool.
+    // Prime any npx download once so the fetch never lands in a timed run.
     for (t, exec, sink) in resolved {
-        if let Provision::Npx { .. } = t.provision {
-            let argv = (t.build_cmd)(exec, repo, sink);
+        if let Provision::Npx { .. } = t.provision
+            && let Some(argv) = pass_argv(t, pass, exec, repo, sink)
+        {
             cmd.arg("--setup").arg(argv.join(" "));
         }
     }
     for (t, exec, sink) in resolved {
-        let argv = (t.build_cmd)(exec, repo, sink);
-        // --command-name keeps the JSON keyed by tool name, not the full argv.
+        let argv =
+            pass_argv(t, pass, exec, repo, sink).expect("resolved tool has an argv for this pass");
         cmd.arg("--command-name").arg(t.name);
         cmd.arg(argv.join(" "));
     }
@@ -253,7 +403,7 @@ fn run_hyperfine(resolved: &[(Tool, String, PathBuf)], repo: &Path, out_json: &P
 }
 
 /// Parse hyperfine's JSON → name → (mean_ms, stddev_ms).
-fn parse_hyperfine(path: &Path) -> Result<std::collections::HashMap<String, (f64, f64)>> {
+fn parse_hyperfine(path: &Path) -> Result<std::collections::HashMap<String, (f64, f64, f64, f64)>> {
     let text = std::fs::read_to_string(path).context("reading hyperfine json")?;
     let v: serde_json::Value = serde_json::from_str(&text).context("parsing hyperfine json")?;
     let mut out = std::collections::HashMap::new();
@@ -270,7 +420,9 @@ fn parse_hyperfine(path: &Path) -> Result<std::collections::HashMap<String, (f64
         // hyperfine reports seconds; convert to ms.
         let mean = r.get("mean").and_then(|x| x.as_f64()).unwrap_or(f64::NAN) * 1000.0;
         let stddev = r.get("stddev").and_then(|x| x.as_f64()).unwrap_or(f64::NAN) * 1000.0;
-        out.insert(name, (mean, stddev));
+        let min = r.get("min").and_then(|x| x.as_f64()).unwrap_or(f64::NAN) * 1000.0;
+        let max = r.get("max").and_then(|x| x.as_f64()).unwrap_or(f64::NAN) * 1000.0;
+        out.insert(name, (mean, stddev, min, max));
     }
     Ok(out)
 }
@@ -383,7 +535,12 @@ fn require_path(path: &str, hint: &str) -> Result<()> {
 
 /// The report: timing table + completeness/version companion + the disclosures
 /// that make it citable. Facts a reader needs to reproduce and trust the numbers.
-fn print_report(rows: &[Row], repo: &Path) {
+fn print_report(rows: &[Row], repo: &Path, pass: Pass) {
+    let title = match pass {
+        Pass::Extraction => "bench-compare (extraction)",
+        Pass::Scanning => "bench-secret (scanning on)",
+    };
+    println!("\n=== {title} ===");
     println!("\n=== bench-compare ===");
     println!("corpus: {}", repo.display());
     println!(
@@ -449,9 +606,15 @@ fn print_report(rows: &[Row], repo: &Path) {
         "  · 'incl. Node startup' rows carry runtime baseline in BOTH time and \
          peak RSS that native tools don't pay."
     );
-    println!(
-        "  · gnaw ran --secret-scan off (extraction-speed number). Its default \
-         (warn) adds the scanner cost — reported separately, since that's a \
-         feature the others lack, not overhead to hide."
-    );
+    match pass {
+        Pass::Extraction => println!(
+            "  · gnaw ran --secret-scan off (extraction-speed number). Scanning \
+             cost is the separate `bench-secret` pass."
+        ),
+        Pass::Scanning => println!(
+            "  · scanning ON. gnaw=gitleaks ruleset, repomix=Secretlint, \
+             repomix-rs=custom regex set (scans by default; its extraction row \
+             already included this — subtract to see others' scan tax)."
+        ),
+    }
 }

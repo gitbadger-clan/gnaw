@@ -51,6 +51,8 @@ pub enum Group {
     ByteCount,
 }
 
+pub type ArgvFn = fn(bin: &str, repo: &Path, sink: &Path) -> Vec<String>;
+
 pub struct Tool {
     pub name: &'static str,
     pub provision: Provision,
@@ -61,13 +63,14 @@ pub struct Tool {
     /// reference set. False = its token column carries a footnote and can't be
     /// ranked against o200k tools (e.g. code2prompt is cl100k-max). Time,
     /// memory, and file count remain comparable regardless.
+    #[allow(dead_code)]
     pub token_comparable: bool,
     /// True if this tool performs secret scanning (for `bench-secret`).
     pub scans_secrets: bool,
     /// argv for a normalized EXTRACTION run (scanning off where the tool allows).
     pub build_cmd: fn(bin: &str, repo: &Path, sink: &Path) -> Vec<String>,
     /// argv for a SCANNING-ON run, if the tool scans. None otherwise.
-    pub build_scan_cmd: Option<fn(bin: &str, repo: &Path, sink: &Path) -> Vec<String>>,
+    pub build_scan_cmd: Option<ArgvFn>,
     /// Counts files the tool emitted, by parsing `sink`.
     pub count_files: fn(sink: &Path) -> Option<usize>,
 }

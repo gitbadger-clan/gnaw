@@ -23,6 +23,8 @@ fn main() -> Result<()> {
         Some("bench-compare") => bench::compare(args),
         Some("bench-compare-inner") => bench::compare_inner(args),
         Some("bench-analyze") => bench::analyze(args),
+        Some("bench-secret") => bench::secret(args),
+        Some("bench-secret-inner") => bench::secret_inner(args),
         Some("bench-regress") => bench::regress(args),
         other => bail!(
             "unknown task {other:?}\n  usage:\n    \
