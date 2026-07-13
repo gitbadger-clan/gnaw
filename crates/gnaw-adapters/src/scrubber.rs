@@ -19,19 +19,37 @@
 
 use gnaw_core::configuration::GnawConfig;
 use gnaw_core::pipeline::{FindingDto, RawContent, RawItem, Scrubber};
-use gnaw_core::secret_scan::{SCANNER, SecretPolicy, SecretScanner};
+use gnaw_core::secret_scan::{SCANNER, SecretPolicy, SecretScanner, resolve_scan_threads};
 use rayon::prelude::*;
 
 pub struct SecretScrubber {
     policy: SecretPolicy,
     allow_paths: Vec<String>,
+    /// Bounded pool the per-file scan runs on. `None` when scanning is `Off`
+    /// (the passthrough never touches it) or if the pool couldn't be built, in
+    /// which case `scrub` falls back to the global pool. Built once in `new`, so
+    /// the thread count lives here rather than as a separate field.
+    scan_pool: Option<rayon::ThreadPool>,
 }
 
 impl SecretScrubber {
     pub fn new(config: &GnawConfig) -> Self {
+        // Build the bounded scan pool once, up front. `None` when scanning is
+        // Off (scrub()'s passthrough returns before using it) or if the OS
+        // refuses the threads — then we fall back to the global pool rather than
+        // failing the run. resolve_scan_threads maps 0 -> min(6, cores): the knee
+        // past which the scan is memory-bound (per-thread DFA cache).
+        let scan_pool = if config.secret_scan == SecretPolicy::Off {
+            None
+        } else {
+            let n = resolve_scan_threads(config.scan_threads);
+            rayon::ThreadPoolBuilder::new().num_threads(n).build().ok()
+        };
+
         Self {
             policy: config.secret_scan,
             allow_paths: config.secret_scan_allow_paths.clone(),
+            scan_pool,
         }
     }
 
@@ -110,10 +128,24 @@ impl Scrubber for SecretScrubber {
         // findings, so the flattened sequence is byte-identical to the serial
         // accumulator. SCANNER is a Sync static, and &self captures
         // (policy, allow_paths) are Sync, so this is sound on rayon threads.
-        let scrubbed: Vec<(RawItem, Vec<FindingDto>)> = items
-            .into_par_iter()
-            .map(|item| self.scrub_item(item))
-            .collect();
+        //
+        // Scoped to a bounded pool: past the DFA-cache knee the scan is
+        // memory-bound, not CPU-bound, so each extra worker mostly adds a
+        // per-thread DFA cache (~230 MB) for little speed. `install` confines
+        // ONLY this par_iter — extraction and the rest of the pipeline keep the
+        // full global pool. Determinism is unchanged: same into_par_iter().map()
+        // .collect(), just fewer workers. `None` (build failed) uses the global
+        // pool rather than aborting the run.
+        let run = || {
+            items
+                .into_par_iter()
+                .map(|item| self.scrub_item(item))
+                .collect::<Vec<(RawItem, Vec<FindingDto>)>>()
+        };
+        let scrubbed = match &self.scan_pool {
+            Some(pool) => pool.install(run),
+            None => run(),
+        };
 
         // Flatten in item order: same sequence the serial accumulator produced.
         let mut items_out = Vec::with_capacity(scrubbed.len());

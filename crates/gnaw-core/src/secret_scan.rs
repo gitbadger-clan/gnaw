@@ -48,6 +48,19 @@ pub trait SecretScanner {
     fn scrub(&self, content: &str, policy: SecretPolicy) -> (String, Vec<Finding>);
 }
 
+/// Resolve the configured scan-thread count. 0 = auto: min(8, available cores),
+/// the measured knee past which the scan is memory-bound (per-thread DFA cache)
+/// and more threads add RSS for little speed.
+pub fn resolve_scan_threads(configured: usize) -> usize {
+    if configured != 0 {
+        return configured;
+    }
+    std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(1)
+        .min(8)
+}
+
 /// Force the secret-scan ruleset to compile now, so the cost lands here
 /// instead of inside the first `scrub` call. Idempotent.
 pub fn warm() {

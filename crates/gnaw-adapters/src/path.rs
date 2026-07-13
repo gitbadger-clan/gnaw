@@ -169,12 +169,28 @@ fn process_files_parallel(
     files_to_process: Vec<FileToProcess>,
     config: &GnawConfig,
 ) -> Result<(Vec<FileEntry>, Vec<SecretFinding>)> {
-    // Process files in parallel with rayon
-    let results: Vec<(Option<FileEntry>, Vec<SecretFinding>)> = files_to_process
-        .par_iter()
-        .map(|fi| process_single_file(fi, config))
-        .collect(); // order-preserving, lock-free
-
+    // Secret scanning holds a per-thread regex-DFA cache, the dominant RSS driver
+    // on large repos; cap the pool at the measured knee when scanning is on. When
+    // it's off there's no cache to bound, so keep full parallelism for the
+    // tokenize/IO fast path. NB: in this (default, non-`pipeline`) build scanning
+    // is fused into per-file processing, so this also bounds tokenize/IO
+    // concurrency — inherent, since the same workers hold the caches.
+    let work = || {
+        files_to_process
+            .par_iter()
+            .map(|fi| process_single_file(fi, config))
+            .collect::<Vec<(Option<FileEntry>, Vec<SecretFinding>)>>()
+    };
+    let results: Vec<(Option<FileEntry>, Vec<SecretFinding>)> =
+        if config.secret_scan != SecretPolicy::Off {
+            let n = gnaw_core::secret_scan::resolve_scan_threads(config.scan_threads);
+            match rayon::ThreadPoolBuilder::new().num_threads(n).build() {
+                Ok(pool) => pool.install(work),
+                Err(_) => work(), // fall back to the global pool
+            }
+        } else {
+            work()
+        };
     let mut files = Vec::new();
     let mut findings = Vec::new();
     for (entry, fnds) in results {
