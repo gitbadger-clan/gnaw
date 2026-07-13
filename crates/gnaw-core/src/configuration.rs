@@ -115,6 +115,21 @@ pub struct GnawConfig {
     #[builder(default)]
     pub secret_scan_allow_paths: Vec<String>,
 
+    /// Threads for the secret scan. 0 = default (min(8, cores)). The scan goes
+    /// memory-bound past ~6 threads (each worker holds its own regex-DFA cache),
+    /// so 8 buys marginal speed for a little RSS — the tuning we ship. Consumed
+    /// where the scan runs in parallel (the scrubber stage, and the legacy
+    /// per-file processing pool), not per file.
+    pub scan_threads: usize,
+
+    /// Per-rule, per-thread regex-DFA cache limit (MB) for the secret scan.
+    /// 0 = built-in default (32). Below ~4 the complex rules thrash a slower
+    /// engine; ~8 clears the knee, so 32 is headroom. Total scan cache ≈
+    /// scan_threads × this. Consumed ONCE at scanner compile time (before the
+    /// first scrub), not per file — the scanner is a process singleton — so over
+    /// REST it's a server-startup knob, not a per-request one.
+    pub dfa_cache_mb: usize,
+
     /// True when the resolved template reasons about a *change* (commit,
     /// changeset, PR). Computed at config-build time from the template
     /// selection — NOT a user-set knob, NOT serialized to TOML. The pipeline

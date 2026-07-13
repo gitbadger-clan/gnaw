@@ -207,6 +207,12 @@ pub fn build_session(
     };
     configuration.secret_scan_allow_paths(allow_paths);
 
+    // Scan tuning: consumed at scanner compile time (dfa) and where the scan
+    // parallelizes (threads). 0 = auto/default for both; resolved downstream.
+    configuration
+        .scan_threads(args.scan_threads)
+        .dfa_cache_mb(args.dfa_cache_mb);
+
     configuration.compression(resolve_compression(args, cfg)?);
 
     configuration
