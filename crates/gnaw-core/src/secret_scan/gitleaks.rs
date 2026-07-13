@@ -131,9 +131,13 @@ pub struct GitleaksScanner {
 /// loader to skip. If a *specific* pattern you care about fails, add a targeted
 /// rewrite here before the build call.
 fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
+    let dfa_mb: usize = std::env::var("GNAW_DFA_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(32);
     RegexBuilder::new(pat)
-        .size_limit(50 * (1 << 20)) // 50 MiB program (default ~10 MiB)
-        .dfa_size_limit(50 * (1 << 20))
+        .size_limit(50 * (1 << 20)) // compiled program — big, unrelated to runtime cache
+        .dfa_size_limit(dfa_mb * (1 << 20)) // runtime DFA cache, per rule per thread
         .build()
 }
 
