@@ -137,6 +137,24 @@ fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
         .build()
 }
 
+/// True if `haystack` contains `needle` case-insensitively (ASCII). `needle`
+/// MUST already be ASCII-lowercase (stopwords are lowered at load). Allocation-free:
+/// slides a window and compares with eq_ignore_ascii_case instead of lowercasing
+/// the whole haystack per call.
+fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    if n.is_empty() {
+        return true;
+    }
+    if n.len() > h.len() {
+        return false;
+    }
+    // Anchor on the first byte (case-folded) to skip most windows cheaply.
+    let n0 = n[0];
+    h.windows(n.len())
+        .any(|w| w[0].eq_ignore_ascii_case(&n0) && w.eq_ignore_ascii_case(n))
+}
+
 /// gnaw-specific overrides layered on top of the vendored gitleaks rules, so
 /// they survive `cargo xtask update-gitleaks` (they live in code, not the TOML).
 ///
@@ -377,21 +395,15 @@ impl GitleaksScanner {
 
     /// True if any allowlist (rule or global) suppresses this hit.
     fn allowed(&self, rule: &CompiledRule, secret: &str, whole: &str) -> bool {
-        let secret_lower = secret.to_ascii_lowercase();
+        // Stopwords are pre-lowered at load. Check case-insensitive containment
+        // WITHOUT allocating a lowercased copy of the secret (per-match String
+        // alloc × 222 rules × N files was the bulk of the scan's page faults).
         if self
             .global_stopwords
             .iter()
-            .any(|w| secret_lower.contains(w.as_str()))
-            || rule
-                .stopwords
-                .iter()
-                .any(|w| secret_lower.contains(w.as_str()))
+            .any(|w| contains_ascii_ci(secret, w))
+            || rule.stopwords.iter().any(|w| contains_ascii_ci(secret, w))
         {
-            return true;
-        }
-        // gnaw value-allowlist: always tested against the secret value, even when
-        // `allow_targets_match` routes the vendored `allow_res` at the whole match.
-        if rule.value_allow_res.iter().any(|re| re.is_match(secret)) {
             return true;
         }
         if self.global_allow_res.iter().any(|re| re.is_match(secret)) {
