@@ -439,6 +439,12 @@ impl GitleaksScanner {
         if self.global_allow_res.iter().any(|re| re.is_match(secret)) {
             return true;
         }
+        // gnaw override: value-shape suppressors (hash/UUID/SRI). ALWAYS tested
+        // against the secret VALUE, regardless of allow_targets_match — the whole
+        // point of the field (see gnaw_override / CompiledRule::value_allow_res).
+        if rule.value_allow_res.iter().any(|re| re.is_match(secret)) {
+            return true;
+        }
         let target = if rule.allow_targets_match {
             whole
         } else {
