@@ -81,6 +81,14 @@ COPY --from=builder /root/.cargo/bin/code2prompt /usr/local/bin/code2prompt
 COPY --from=builder /root/.cargo/bin/yek         /usr/local/bin/yek
 COPY --from=builder /opt/bench-tools/repomix-rs-src/bin/repomix /usr/local/bin/repomix-rs
 
+# repomix-rs has no CLI flag to disable its secret scan — config only, at
+# $HOME/.repomix/. Bake a config that turns it OFF; the extraction argv (tools.rs)
+# points HOME here via `env HOME=...`, the scanning argv uses the default HOME and
+# scans. Keeps the extraction comparison fair without touching the corpus.
+RUN mkdir -p /opt/rmxrs-noscan/.repomix \
+    && printf '{"security":{"enable_secretlint":false}}\n' \
+       > /opt/rmxrs-noscan/.repomix/repomix.config.json
+
 # --- npm competitors (pinned). MUST be in the final stage: they're
 # node_modules trees that need Node to run, not liftable binaries. Separate
 # prefixes — both packages ship a `repomix` binary and would collide in a

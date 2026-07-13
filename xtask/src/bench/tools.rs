@@ -189,12 +189,15 @@ pub fn tools() -> Vec<Tool> {
             // No `--token-count-encoding` flag exists; it hardcodes its tokenizer.
             // Assumed o200k_base — confirm via the token total before trusting the row.
             token_comparable: true,
-            scans_secrets: false,
+            scans_secrets: true,
             build_cmd: |bin, repo, sink| {
-                // Positional `root` = dir to pack. --style xml is the default but kept
-                // explicit for the record. --compress stays OFF (tree-sitter compression
-                // = different work; raw-vs-raw only).
+                // No CLI off-switch: point HOME at the baked config that disables
+                // secretlint, so the extraction row is scan-free and fair. XDG_CACHE_HOME
+                // keeps any cache writes off the read-only fake HOME.
                 vec![
+                    "env".into(),
+                    "HOME=/opt/rmxrs-noscan".into(),
+                    "XDG_CACHE_HOME=/tmp".into(),
                     bin.into(),
                     repo.display().to_string(),
                     "--output".into(),
@@ -203,7 +206,16 @@ pub fn tools() -> Vec<Tool> {
                     "xml".into(),
                 ]
             },
-            build_scan_cmd: None,
+            build_scan_cmd: Some(|bin, repo, sink| {
+                vec![
+                    bin.into(),
+                    repo.display().to_string(),
+                    "--output".into(),
+                    sink.display().to_string(),
+                    "--style".into(),
+                    "xml".into(),
+                ]
+            }),
             count_files: |sink| count_matches(sink, |l| l.trim_start().starts_with("<file path=")),
         },
         Tool {
