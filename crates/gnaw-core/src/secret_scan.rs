@@ -10,6 +10,7 @@
 mod gitleaks;
 
 use gitleaks::GitleaksScanner;
+pub use gitleaks::set_dfa_cache_mb;
 use serde::{Deserialize, Serialize};
 
 pub static SCANNER: once_cell::sync::Lazy<GitleaksScanner> =

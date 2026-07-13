@@ -29,9 +29,15 @@ use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
 use regex::{Regex, RegexBuilder};
 use serde::Deserialize;
+use std::sync::OnceLock;
 
 use super::{Finding, SecretPolicy, SecretScanner, line_of, redact_preview, shannon_entropy};
 
+/// Process-wide per-thread DFA-cache limit (MB) for the scan ruleset. Set once,
+/// before the scanner first compiles (`secret_scan::warm()` or the first scrub);
+/// later calls are ignored. The scanner is a process singleton, so this is
+/// genuinely a process-level knob.
+static DFA_LIMIT_MB: OnceLock<usize> = OnceLock::new();
 /// The vendored default ruleset, baked into the binary at build time.
 const GITLEAKS_TOML: &str = include_str!("../../assets/gitleaks.toml");
 
@@ -126,18 +132,38 @@ pub struct GitleaksScanner {
     dropped: usize,
 }
 
+/// Set the scan DFA-cache limit (MB). 0 is a no-op (falls through to env/default),
+/// as is any call after the scanner has already compiled.
+pub fn set_dfa_cache_mb(mb: usize) {
+    if mb != 0 {
+        let _ = DFA_LIMIT_MB.set(mb);
+    }
+}
+
+/// Resolve the DFA cache size in bytes: explicit setter > `GNAW_DFA_MB` env
+/// (kept so the bench harness keeps working) > 8 MB (the measured knee).
+fn dfa_size_limit_bytes() -> usize {
+    let mb = DFA_LIMIT_MB
+        .get()
+        .copied()
+        .or_else(|| {
+            std::env::var("GNAW_DFA_MB")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+        })
+        .filter(|&n| n > 0)
+        .unwrap_or(32);
+    mb * (1 << 20)
+}
+
 /// Adapt a gitleaks (Go RE2) pattern to Rust's `regex`. Raises the compiled-size
 /// limits so big alternations build, and otherwise surfaces the error for the
 /// loader to skip. If a *specific* pattern you care about fails, add a targeted
 /// rewrite here before the build call.
 fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
-    let dfa_mb: usize = std::env::var("GNAW_DFA_MB")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(32);
     RegexBuilder::new(pat)
-        .size_limit(50 * (1 << 20)) // compiled program — big, unrelated to runtime cache
-        .dfa_size_limit(dfa_mb * (1 << 20)) // runtime DFA cache, per rule per thread
+        .size_limit(50 * (1 << 20)) // compiled *program* size — keep generous
+        .dfa_size_limit(dfa_size_limit_bytes()) // per-thread DFA cache — the RSS knob
         .build()
 }
 

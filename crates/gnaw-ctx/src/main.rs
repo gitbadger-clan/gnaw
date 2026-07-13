@@ -135,6 +135,10 @@ async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> 
     // Precompile the gitleaks ruleset up-front ONLY when we'll actually scan, so
     // `--secret-scan off` doesn't pay the ~0.4s compile it will never use.
     if session.config.secret_scan != gnaw_core::secret_scan::SecretPolicy::Off {
+        // Transport the resolved DFA-cache size across the Lazy<GitleaksScanner>
+        // boundary BEFORE warm() triggers the first compile. 0 is a no-op in the
+        // setter, so an unset flag falls through to GNAW_DFA_MB / the default.
+        gnaw_core::secret_scan::set_dfa_cache_mb(session.config.dfa_cache_mb);
         gnaw_core::secret_scan::warm();
     }
     // ~~~ Determine Output Behavior ~~~
