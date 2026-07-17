@@ -49,9 +49,10 @@ pub trait SecretScanner {
     fn scrub(&self, content: &str, policy: SecretPolicy) -> (String, Vec<Finding>);
 }
 
-/// Resolve the configured scan-thread count. 0 = auto: min(8, available cores),
-/// the measured knee past which the scan is memory-bound (per-thread DFA cache)
-/// and more threads add RSS for little speed.
+/// Resolve the configured scan-thread count. 0 = default: min(8, available
+/// cores). Past ~6 threads extra workers buy little wall time; per-thread cost
+/// (DFA cache growth) shows on keyword-rich content but the dominant scan RSS
+/// is the compiled ruleset itself, now mitigated by lazy per-rule compilation
 pub fn resolve_scan_threads(configured: usize) -> usize {
     if configured != 0 {
         return configured;
@@ -62,8 +63,11 @@ pub fn resolve_scan_threads(configured: usize) -> usize {
         .min(8)
 }
 
-/// Force the secret-scan ruleset to compile now, so the cost lands here
-/// instead of inside the first `scrub` call. Idempotent.
+/// Force the ruleset to load now: parse, keyword automaton, and the always-on
+/// rules' compile — so that cost lands here instead of inside the first `scrub`
+/// call. Keyword-gated rules compile lazily on first activation (warm() is no
+/// longer "compile everything"; that's `compile_all`, tests/diagnostics only).
+/// Idempotent.
 pub fn warm() {
     once_cell::sync::Lazy::force(&SCANNER);
 }
