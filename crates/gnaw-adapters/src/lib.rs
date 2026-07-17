@@ -26,6 +26,7 @@ pub use renderer::{HandlebarsRenderer, RendererConfig};
 pub use scrubber::SecretScrubber;
 pub use selector::{ExplicitSelector, PassThrough, PatternSelector};
 pub use source::{
-    ChangedPathsSource, ChangedScope, CommitRangeSource, StdinPathsSource, WorkingTreeSource,
+    ChangedPathsSource, ChangedScope, CommitRangeSource, StdinContentSource, StdinPathsSource,
+    WorkingTreeSource,
 };
 pub use tree::{FullWalkTree, ItemsTree};

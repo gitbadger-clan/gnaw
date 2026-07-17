@@ -26,6 +26,12 @@ pub struct GnawConfig {
     /// so no builder call site needs to set it.)
     pub stdin_paths: Option<Vec<String>>,
 
+    /// Raw piped stdin classified as CONTENT (not a path list): scanned,
+    /// counted, and rendered as one synthetic file named `stdin`. Runtime-only,
+    /// same contract as `stdin_paths`; the two are mutually exclusive (the
+    /// frontend's classify_stdin sets exactly one).
+    pub stdin_content: Option<String>,
+
     /// List of glob-like patterns to include.
     pub include_patterns: Vec<String>,
 

@@ -15,7 +15,8 @@ use gnaw_adapters::git::{get_git_diff, get_git_diff_between_branches, get_git_lo
 use gnaw_adapters::{
     ChangedChunker, ChangedPathsSource, ChangedScope, CommitRangeSource, FullWalkTree,
     HandlebarsRenderer, IdentityChunker, ItemsTree, PassThrough, PatternSelector, RendererConfig,
-    SecretScrubber, StdinPathsSource, TakeUntilBudget, TiktokenCounter, Uniform, WorkingTreeSource,
+    SecretScrubber, StdinContentSource, StdinPathsSource, TakeUntilBudget, TiktokenCounter,
+    Uniform, WorkingTreeSource,
 };
 use gnaw_core::builtin_templates::BuiltinTemplates;
 use gnaw_core::configuration::GnawConfig;
@@ -69,7 +70,16 @@ pub fn build_spec(config: &GnawConfig) -> Result<PipelineSpec> {
         Box<dyn ContextSource>,
         Box<dyn Chunker>,
         Box<dyn TreeBuilder>,
-    ) = if let Some(paths) = config.stdin_paths.clone() {
+    ) = if let Some(text) = config.stdin_content.clone() {
+        // Piped CONTENT: one synthetic item named `stdin`. Highest precedence —
+        // mutually exclusive with stdin_paths by construction (classify_stdin
+        // sets exactly one), but ordered first so a bug there fails visibly.
+        (
+            Box::new(StdinContentSource::new(text)),
+            Box::new(IdentityChunker),
+            Box::new(ItemsTree),
+        )
+    } else if let Some(paths) = config.stdin_paths.clone() {
         // stdin paths: source exactly the piped files; items-derived tree of
         // just those files. No working-tree walk.
         (

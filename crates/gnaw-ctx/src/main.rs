@@ -26,6 +26,7 @@ use gnaw_core::{template::write_to_file, tokenizer::TokenizerType};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info};
 use std::io::{IsTerminal, Write};
+use std::path::Path;
 use tui::run_tui;
 
 #[tokio::main]
@@ -72,22 +73,17 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Slurp the piped path list once, here at the frontend edge, so the source
-    // adapter stays pure and testable with an in-memory Vec. Blank lines are
-    // dropped; paths are resolved against the config root inside the source.
-    let stdin_paths: Option<Vec<String>> = if use_stdin {
+    // Slurp piped stdin once, RAW, at the frontend edge. Whether it's a path
+    // list or content is decided by classify_stdin AFTER config loads —
+    // classification resolves lines against the root, and the root can come
+    // from a config file, which build_session hasn't read yet at this point.
+    let stdin_raw: Option<String> = if use_stdin {
         use std::io::Read;
         let mut buf = String::new();
         std::io::stdin()
             .read_to_string(&mut buf)
-            .context("reading paths from stdin")?;
-        Some(
-            buf.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(String::from)
-                .collect(),
-        )
+            .context("reading piped stdin")?;
+        Some(buf)
     } else {
         None
     };
@@ -102,7 +98,7 @@ async fn main() -> Result<()> {
     } else {
         let timing = args.timing;
         let started = timing.then(std::time::Instant::now);
-        let res = run_cli_mode_with_args(args, stdin_paths).await;
+        let res = run_cli_mode_with_args(args, stdin_raw).await;
         if let Some(t) = started {
             let secs = t.elapsed().as_secs_f64();
             if secs < 1.0 {
@@ -115,8 +111,39 @@ async fn main() -> Result<()> {
     }
 }
 
+enum StdinMode {
+    Paths(Vec<String>),
+    Content(String),
+}
+
+fn classify_stdin(raw: String, root: &Path) -> StdinMode {
+    // Sniff-only cap: content can be megabytes and we only need a signal.
+    // ANY resolving line → path list. This deliberately protects the documented
+    // `git diff --name-only` workflow where most listed files may be deleted
+    // (they're dropped downstream, as the stdin-paths reference specifies);
+    // genuine content (PEM, logs, diffs) resolves zero lines. Force-modes
+    // (`-` for content, --stdin-paths for lists) cover the pathological rest.
+    let any_file = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(1000)
+        .any(|l| root.join(l).is_file());
+    if any_file {
+        StdinMode::Paths(
+            raw.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect(), // FULL list — the cap was only for sniffing
+        )
+    } else {
+        StdinMode::Content(raw)
+    }
+}
+
 /// Run the CLI mode with parsed arguments
-async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> Result<()> {
+async fn run_cli_mode_with_args(args: Cli, stdin_raw: Option<String>) -> Result<()> {
     use config_loader::{get_default_output_destination, load_config};
     use gnaw_core::configuration::OutputDestination;
 
@@ -130,7 +157,18 @@ async fn run_cli_mode_with_args(args: Cli, stdin_paths: Option<Vec<String>>) -> 
     // pipeline's source selection reads `config.stdin_paths` to decide whether
     // to source the piped files instead of walking the tree.
     let mut session = config::build_session(Some(&config_source), &args, false)?;
-    session.config.stdin_paths = stdin_paths;
+    if let Some(raw) = stdin_raw {
+        match classify_stdin(raw, &session.config.path) {
+            StdinMode::Paths(p) => {
+                info!("stdin: treated as path list");
+                session.config.stdin_paths = Some(p);
+            }
+            StdinMode::Content(c) => {
+                info!("stdin: treated as content (no lines resolved as files)");
+                session.config.stdin_content = Some(c);
+            }
+        }
+    }
 
     // Precompile the gitleaks ruleset up-front ONLY when we'll actually scan, so
     // `--secret-scan off` doesn't pay the ~0.4s compile it will never use.

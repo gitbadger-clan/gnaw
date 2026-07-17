@@ -293,3 +293,44 @@ impl ContextSource for StdinPathsSource {
         Ok(items)
     }
 }
+
+/// Sources piped stdin CONTENT as one synthetic file named `stdin`. The
+/// frontend's classify_stdin decided this input is content, not a path list
+/// (zero lines resolved to files under the root); by the time it lands here
+/// it's just text. Needs none of StdinPathsSource's machinery: no root
+/// canonicalization (there are no paths to confine), no findings home (the
+/// Scrubber stage scans downstream, same as every other source), no config
+/// (nothing here reads one).
+///
+/// The synthetic path is `stdin` — no extension, so downstream language-aware
+/// stages (compression, syntax chunking) fall back to plain text, which is the
+/// only honest choice for bytes of unknown provenance.
+pub struct StdinContentSource {
+    text: String,
+}
+
+impl StdinContentSource {
+    pub fn new(text: String) -> Self {
+        Self { text }
+    }
+}
+
+impl ContextSource for StdinContentSource {
+    fn items(&self, _opts: &SourceOpts) -> Result<Vec<RawItem>, PipelineError> {
+        // Whitespace-only input yields an empty selection rather than an empty
+        // synthetic file — same policy as empty files dropped in a walk, and
+        // same as an empty piped path list.
+        if self.text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![RawItem {
+            path: "stdin".to_string(),
+            extension: String::new(),
+            content: RawContent::Text {
+                text: self.text.clone(),
+            },
+            status: None,
+            old_path: None,
+        }])
+    }
+}
