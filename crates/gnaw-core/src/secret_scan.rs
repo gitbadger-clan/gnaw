@@ -10,6 +10,7 @@
 mod gitleaks;
 
 use gitleaks::GitleaksScanner;
+pub use gitleaks::compile_pattern_for_diagnostics;
 pub use gitleaks::set_dfa_cache_mb;
 use serde::{Deserialize, Serialize};
 

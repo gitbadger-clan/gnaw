@@ -166,6 +166,12 @@ fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
         .dfa_size_limit(dfa_size_limit_bytes()) // per-thread DFA cache — the RSS knob
         .build()
 }
+/// Diagnostics only (xtask rule-memory): the exact builder settings the
+/// scanner uses, so measured sizes describe what actually ships.
+#[doc(hidden)]
+pub fn compile_pattern_for_diagnostics(pat: &str) -> Result<Regex, regex::Error> {
+    compile_pattern(pat)
+}
 
 /// True if `haystack` contains `needle` case-insensitively (ASCII). `needle`
 /// MUST already be ASCII-lowercase (stopwords are lowered at load). Allocation-free:
