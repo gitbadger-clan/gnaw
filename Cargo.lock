@@ -4607,8 +4607,11 @@ name = "xtask"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "gnaw-core",
+ "regex",
  "serde",
  "serde_json",
+ "toml",
  "ureq",
  "which",
 ]
