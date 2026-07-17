@@ -1,0 +1,202 @@
+# Reproducible MEMORY-SCALING benchmark image for gnaw vs other context builders.
+# Replica of benchmarks/Dockerfile with ONE difference: instead of cloning a
+# real repo, the corpus is GENERATED — deterministic low-entropy filler at
+# several sizes, so peak-RSS can be plotted against corpus size (flat = truly
+# streaming, linear = buffered). Same multi-stage layout; the digest remains
+# the citable artifact because generation is fully deterministic.
+
+# =============================================================================
+# STAGE 1 — builder: Rust toolchain, cargo-installed competitors, gnaw+xtask.
+# Everything here (toolchain, target/, cargo caches) stays in this stage.
+# =============================================================================
+FROM debian:bookworm-slim AS builder
+
+# Build deps: zlib1g-dev added (libz-sys/git2 need zlib.h to compile).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl ca-certificates build-essential pkg-config libssl-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Rust toolchain (pinned). PATH set BEFORE the RUN so rustup is findable. ---
+ARG RUST_VERSION=1.90.0
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --profile minimal --default-toolchain none \
+    && rustup toolchain install ${RUST_VERSION} \
+    && rustup default ${RUST_VERSION}
+
+# Normalize release build flags across ALL Rust tools (gnaw + competitors) so
+# measured deltas reflect algorithms, not build config. Anchored to gnaw's
+# shipping profile. panic is deliberately NOT normalized: forcing abort onto
+# crates that may rely on unwinding is risky, and its throughput effect is noise.
+ENV CARGO_PROFILE_RELEASE_LTO=thin \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+
+# --- Rust competitors (pinned), into ~/.cargo/bin. Cache cleaned same layer. ---
+RUN cargo install --version 4.3.0 code2prompt \
+    && cargo install --git https://github.com/mohsen1/yek --rev v0.25.5 yek \
+    && rm -rf /root/.cargo/git /root/.cargo/registry
+
+RUN cargo install --git https://github.com/sopaco/repomix-rs \
+        --rev 5798dc0ffb79b3b99b3781040f844d56e9bb36ef \
+        --root /opt/bench-tools/repomix-rs-src \
+        repomix-cli \
+    && rm -rf /root/.cargo/git /root/.cargo/registry
+
+# --- gnaw + xtask (built from local source = the versions under test) ---
+WORKDIR /build
+COPY . /build
+RUN cargo build --release -p gnaw-ctx -p xtask
+
+# =============================================================================
+# STAGE 2 — final: slim runtime. Only what's needed to RUN the benchmark.
+# =============================================================================
+FROM debian:bookworm-slim
+
+ENV BENCH_TOOLS_DIR=/opt/bench-tools
+# Runtime deps (NOT -dev): GNU time for peak RSS, curl for hyperfine, ca-certs,
+# and the RUNTIME shared libs the Rust binaries link (libssl3, zlib1g — the
+# .so's, not the headers). `git` is DROPPED vs the base image: it existed only
+# for the corpus clone, and the generated corpus has no .git anyway (matching
+# the base image, which stripped it). Re-add if a tool shells out to git.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        time curl ca-certificates libssl3 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- hyperfine (pinned, arch-aware via TARGETARCH) ---
+ARG HYPERFINE_VERSION=1.20.0
+ARG TARGETARCH
+RUN curl -L "https://github.com/sharkdp/hyperfine/releases/download/v${HYPERFINE_VERSION}/hyperfine_${HYPERFINE_VERSION}_${TARGETARCH}.deb" \
+        -o /tmp/hyperfine.deb \
+    && dpkg -i /tmp/hyperfine.deb && rm /tmp/hyperfine.deb
+
+# --- Node (required for repomix, which is npm-distributed) ---
+# 24.x = current LTS line. NB: verify deb.nodesource.com/setup_24.x still
+# resolves before relying on a cached build — this endpoint moves with LTS.
+ARG NODE_VERSION=24.x
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION} | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Binaries from the builder: gnaw, xtask, and the cargo competitors. ---
+# These are self-contained executables — safe to lift into the slim stage.
+COPY --from=builder /build/target/release/gnaw   /usr/local/bin/gnaw
+COPY --from=builder /build/target/release/xtask  /usr/local/bin/xtask
+COPY --from=builder /root/.cargo/bin/code2prompt /usr/local/bin/code2prompt
+COPY --from=builder /root/.cargo/bin/yek         /usr/local/bin/yek
+COPY --from=builder /opt/bench-tools/repomix-rs-src/bin/repomix /usr/local/bin/repomix-rs
+
+# repomix-rs has no CLI flag to disable its secret scan — config only, at
+# $HOME/.repomix/. Bake a config that turns it OFF; the extraction argv points
+# HOME here, the scanning argv uses the default HOME and scans. The path is an
+# ENV so tools.rs can read RMXRS_NOSCAN_HOME instead of duplicating the string —
+# one source of truth for the coupling that keeps the extraction row fair.
+ENV RMXRS_NOSCAN_HOME=/opt/rmxrs-noscan
+RUN mkdir -p ${RMXRS_NOSCAN_HOME}/.repomix \
+    && printf '{"security":{"enable_secretlint":false}}\n' \
+       > ${RMXRS_NOSCAN_HOME}/.repomix/repomix.config.json
+
+# --- npm competitors (pinned). MUST be in the final stage: they're
+# node_modules trees that need Node to run, not liftable binaries. Own prefix;
+# resolve_exec finds the binary via the prefix's .bin shim.
+RUN npm install --prefix /opt/bench-tools/node/repomix     repomix@1.16.0
+
+# --- Build-time smoke tests: every tool must run, and the noscan config must
+# parse and actually disable the scan. Fails the BUILD on a dangling COPY'd
+# symlink (repomix-rs), a broken npm tree, or a noscan typo — instead of
+# silently corrupting a benchmark run later.
+RUN gnaw --version \
+    && code2prompt --version \
+    && yek --version \
+    && repomix-rs --version \
+    && /opt/bench-tools/node/repomix/node_modules/.bin/repomix --version \
+    && hyperfine --version \
+    && /usr/bin/time --version \
+    && node -e 'const c=require(process.env.RMXRS_NOSCAN_HOME+"/.repomix/repomix.config.json"); \
+                if (c.security.enable_secretlint !== false) { throw new Error("noscan config does not disable secretlint"); }'
+
+# --- OOM-as-datapoint wrapper. A size swept past the tool's memory ceiling
+# gets OOM-killed by the cgroup; without this the row just vanishes. The
+# wrapper runs the inner command and, if it dies WITHOUT having produced the
+# --out artifact, writes a marker JSON there so the sweep records the failure
+# as a result. Limits, honestly: exit 137 is only seen here when the DIRECT
+# child is the OOM victim; when the kernel kills a grandchild (gnaw under
+# xtask), xtask surfaces its own error code — the marker still gets written,
+# with that code. Usage:
+#   docker run --memory 2g <img> bench-wrap xtask bench-secret-inner \
+#       --repo /corpus-2048m --out /out/secret_2048.json
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      '# bench-wrap: run "$@"; if it fails and left no --out artifact, write an' \
+      '# error marker there so a memory sweep records OOM/failure as a datapoint.' \
+      'out=""; prev=""' \
+      'for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done' \
+      '"$@"; rc=$?' \
+      'if [ "$rc" -ne 0 ] && [ -n "$out" ] && [ ! -e "$out" ]; then' \
+      '  printf '"'"'{"error":"bench-failed","exit_code":%s,"oom_suspected":%s}\n'"'"' \' \
+      '    "$rc" "$([ "$rc" -eq 137 ] && echo true || echo false)" > "$out" || true' \
+      'fi' \
+      'exit "$rc"' \
+      > /usr/local/bin/bench-wrap \
+    && chmod +x /usr/local/bin/bench-wrap
+
+# =============================================================================
+# Corpus — GENERATED, not cloned. One corpus per size in CORPUS_SIZES_MB, at
+# /corpus-<N>m. Design constraints, each load-bearing:
+#   - DETERMINISTIC: no $RANDOM, no timestamps → same input bytes every build,
+#     so the digest stays citable.
+#   - LOW ENTROPY: plausible Rust-ish source lines, NOT urandom/base64 — high-
+#     entropy filler would light up every secret scanner and turn the memory
+#     benchmark into an FP benchmark.
+#   - GLOBALLY UNIQUE LINES: the handler counter is offset per file (f×100000,
+#     far past the ~10.5k lines a 1 MB file holds), so no two lines anywhere in
+#     the corpus are identical. Content-dedup / chunk-dedup / compression in a
+#     tool cannot shrink the working set — which would make a BUFFERED tool
+#     read as flat, the false negative that would invalidate this benchmark.
+#   - FANNED OUT: files sharded into subdirs of 512 so no single readdir
+#     dominates, mimicking a real tree's shape.
+# Generation: ONE awk process writes the LARGEST corpus (no per-file spawns);
+# smaller corpora are HARDLINKS to its first N files. Every file is unique
+# content, so subsetting can't reintroduce dedup — and tar preserves hardlinks,
+# so the image stores the corpus bytes once (~max size, not the sum of sizes).
+# Consequence: the per-file header carries the file id but NOT the corpus size
+# (hardlinked content must be byte-identical across sizes); the size under test
+# is on the record via the --repo path in the report meta instead.
+# =============================================================================
+ARG CORPUS_SIZES_MB="256 1024 2048 4096 8192"
+ARG CORPUS_FILE_MB=1
+RUN set -eu; \
+    max=0; for mb in ${CORPUS_SIZES_MB}; do [ "$mb" -gt "$max" ] && max=$mb; done; \
+    n_max=$(( max / CORPUS_FILE_MB )); \
+    d=0; while [ $(( d * 512 )) -le "$n_max" ]; do \
+        mkdir -p "/corpus-${max}m/src/m${d}"; d=$(( d + 1 )); \
+    done; \
+    awk -v n="$n_max" -v mb="${CORPUS_FILE_MB}" -v root="/corpus-${max}m/src" 'BEGIN { \
+        target = mb * 1048576; \
+        for (f = 1; f <= n; f++) { \
+            file = sprintf("%s/m%d/f%d.rs", root, int(f / 512), f); \
+            printf "// file %d — deterministic filler, generated at image build\n", f > file; \
+            bytes = 0; i = f * 100000; \
+            while (bytes < target) { \
+                s = sprintf("fn handler_%09d(x: u64) -> u64 { x.wrapping_mul(2654435761).rotate_left(%d) } // low-entropy filler", i, i % 64); \
+                print s > file; bytes += length(s) + 1; i++; \
+            } \
+            close(file); \
+        } }'; \
+    for mb in ${CORPUS_SIZES_MB}; do \
+        [ "$mb" = "$max" ] && continue; \
+        n=$(( mb / CORPUS_FILE_MB )); \
+        f=1; \
+        while [ "$f" -le "$n" ]; do \
+            dir="/corpus-${mb}m/src/m$(( f / 512 ))"; \
+            mkdir -p "$dir"; \
+            ln "/corpus-${max}m/src/m$(( f / 512 ))/f${f}.rs" "${dir}/f${f}.rs"; \
+            f=$(( f + 1 )); \
+        done; \
+    done; \
+    du -sh /corpus-*m
+
+# No single /corpus workdir: pass the size explicitly at run time, e.g.
+#   docker run --memory 256m <img> bench-wrap xtask bench-compare-inner \
+#       --repo /corpus-1024m --out /out/r1024.json
+# so the size under test is on the record in the report meta, not implied.
+WORKDIR /
