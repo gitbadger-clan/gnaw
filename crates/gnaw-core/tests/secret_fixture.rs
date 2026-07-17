@@ -99,8 +99,15 @@ const CASES: &[Case] = &[
         id: "private-key",
         kind: Tp,
         hint: "private-key",
-        note: "",
-        content: "-----BEGIN RSA PRIVATE KEY-----\nMIIBOwIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Q\nuKUpRKfFLfRYC9AIKjbJTWit+CqvjWYzvQwECAwEAAQ==\n-----END RSA PRIVATE KEY-----",
+        note: "64-col wrapped body — the override requires a 64-char base64 run",
+        content: "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA7vQmXhZk3tR9nWq2LmYc5xJd8fKp0sHg4uNa6bTe1iVw9zoQ\nkYr3mCx7pDf2sLn8vBt4wGh6jNq1eZa5oXu9iMc0dRy2lKs7fTb3nVp8qWg4hEj6\n-----END RSA PRIVATE KEY-----",
+    },
+    Case {
+        id: "private-key-ed25519",
+        kind: Tp,
+        hint: "private-key",
+        note: "PKCS#8 body is ONE 64-char line — the {1} calibration exists for this",
+        content: "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEjLK2AIVaqESkkXRRYRcGIzzDMq96bU9waQVBboqGgslQ\n-----END PRIVATE KEY-----",
     },
     Case {
         id: "anthropic-key",

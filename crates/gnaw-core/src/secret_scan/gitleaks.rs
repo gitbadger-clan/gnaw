@@ -297,28 +297,56 @@ const HOT_RULES: &[&str] = &["generic-api-key", "jwt", "private-key"];
 /// itself pure-hex-of-hash-length or UUID-shaped gets allowlisted.
 struct RuleOverride {
     secret_group: Option<usize>,
+    /// Replaces the vendored regex entirely (raw source — compiles lazily like
+    /// any pattern, so an override participates in the memory story unchanged).
+    pattern: Option<&'static str>,
     value_allow_res: Vec<Regex>,
 }
 
 fn gnaw_override(id: &str) -> Option<RuleOverride> {
-    if id != "generic-api-key" {
-        return None;
+    match id {
+        "generic-api-key" => {
+            // Anchored to the whole value: a token that merely CONTAINS hex isn't hit.
+            let value_allow_res = [
+                r"^[a-fA-F0-9]{32}$", // md5
+                r"^[a-fA-F0-9]{40}$", // sha1 / git sha
+                r"^[a-fA-F0-9]{64}$", // sha256
+                r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", // uuid
+                r"^sha(?:256|512)-[A-Za-z0-9+/]+={0,2}$", // subresource-integrity hash
+            ]
+            .iter()
+            .map(|p| compile_pattern(p).expect("builtin gnaw value-allowlist regex"))
+            .collect();
+            Some(RuleOverride {
+                secret_group: Some(1),
+                pattern: None,
+                value_allow_res,
+            })
+        }
+        // The vendored pattern closes on the bare `KEY----` suffix, so a short/
+        // truncated PEM stub lazily extends and CONSUMES the next block's BEGIN
+        // marker — a stub above a real key shadows it (detection bypass), and
+        // doc placeholders match at all. Adopted from the closed gitleaks PR
+        // #1594 (rgmz; in production in LeakTK's patterns): requires a full END
+        // marker to close and >=2 base64 runs of 64 chars, so placeholders
+        // can't match and a match can't swallow a BEGIN. Residual: a stub
+        // directly above a real key attributes the finding to the stub's line
+        // (the key content is still inside the match). Drop this override if
+        // upstream merges an equivalent.
+        "private-key" => Some(RuleOverride {
+            secret_group: None,
+            // {1}, not the PR's {2}: an Ed25519 PKCS#8 body is a SINGLE 64-char
+            // base64 line, which {2} misses (confirmed live via
+            // `openssl genpkey -algorithm ed25519 | gnaw`). Placeholders have
+            // ZERO 64-char runs, so {1} still suppresses them, and the full-END
+            // close still prevents the BEGIN-swallowing shadowing.
+            pattern: Some(
+                r"(?i)-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:[a-z0-9/+]{64}[\s\S]*?){1}-----END[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----",
+            ),
+            value_allow_res: Vec::new(),
+        }),
+        _ => None,
     }
-    // Anchored to the whole value: a token that merely CONTAINS hex isn't hit.
-    let value_allow_res = [
-        r"^[a-fA-F0-9]{32}$", // md5
-        r"^[a-fA-F0-9]{40}$", // sha1 / git sha
-        r"^[a-fA-F0-9]{64}$", // sha256
-        r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", // uuid
-        r"^sha(?:256|512)-[A-Za-z0-9+/]+={0,2}$", // subresource-integrity hash
-    ]
-    .iter()
-    .map(|p| compile_pattern(p).expect("builtin gnaw value-allowlist regex"))
-    .collect();
-    Some(RuleOverride {
-        secret_group: Some(1),
-        value_allow_res,
-    })
 }
 
 impl GitleaksScanner {
@@ -378,11 +406,16 @@ impl GitleaksScanner {
                 }
             }
 
-            let ov = gnaw_override(&prep.id);
+            let ov = gnaw_override(&raw.id);
             let secret_group = ov
                 .as_ref()
                 .and_then(|o| o.secret_group)
-                .unwrap_or(prep.secret_group);
+                .unwrap_or(raw.secret_group);
+            let pattern = ov
+                .as_ref()
+                .and_then(|o| o.pattern)
+                .map(str::to_owned)
+                .unwrap_or(raw.regex);
             let value_allow_res = ov.map(|o| o.value_allow_res).unwrap_or_default();
 
             rules.push(CompiledRule {
