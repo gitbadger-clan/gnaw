@@ -158,14 +158,25 @@ fn dfa_size_limit_bytes() -> usize {
 
 /// Adapt a gitleaks (Go RE2) pattern to Rust's `regex`. Raises the compiled-size
 /// limits so big alternations build, and otherwise surfaces the error for the
-/// loader to skip. If a *specific* pattern you care about fails, add a targeted
-/// rewrite here before the build call.
+/// caller to skip-and-count. `unicode(false)` matches Go regexp semantics
+/// (gitleaks' native engine: `\w`, `(?i)` are ASCII there) and avoids compiling
+/// Unicode case-folding tables into every big `(?i)` alternation. If a
+/// *specific* pattern you care about fails, add a targeted rewrite here before
+/// the build call.
 fn compile_pattern(pat: &str) -> Result<Regex, regex::Error> {
-    RegexBuilder::new(pat)
-        .size_limit(50 * (1 << 20)) // compiled *program* size — keep generous
-        .dfa_size_limit(dfa_size_limit_bytes()) // per-thread DFA cache — the RSS knob
-        .build()
+    let build = |unicode: bool| {
+        RegexBuilder::new(pat)
+            .unicode(unicode)
+            .size_limit(50 * (1 << 20))
+            .dfa_size_limit(dfa_size_limit_bytes())
+            .build()
+    };
+    // ASCII-first (Go-regexp semantics, and MUCH smaller programs for the big
+    // (?i) alternations). A handful of patterns use constructs that only parse
+    // in Unicode mode (\x{...} > 0x7F, etc.) — fall back rather than drop them.
+    build(false).or_else(|_| build(true))
 }
+
 /// Diagnostics only (xtask rule-memory): the exact builder settings the
 /// scanner uses, so measured sizes describe what actually ships.
 #[doc(hidden)]
