@@ -1,6 +1,6 @@
 +++
 title = "Secret scanning"
-description = "The --secret-scan policies, the built-in detection rules, path allowlisting, and the .gnawconfig keys."
+description = "The --secret-scan policies, the gitleaks-based detection rules, gnaw's deliberate overrides, path allowlisting, and the .gnawconfig keys."
 weight = 50
 +++
 
@@ -14,6 +14,10 @@ through; this page is the exhaustive surface.
 | --- | --- | --- |
 | `--secret-scan` | `off`, `warn`, `redact`, `block` | What to do on a finding (default `warn`) |
 | `--secret-scan-allow <FRAGMENT>` | path substring, repeatable | Skip files whose path contains the fragment |
+| `--scan-threads <N>` | integer, `0` = default | Threads for the scan (see [tuning](#tuning)) |
+| `--dfa-cache-mb <MB>` | integer, `0` = default | Per-thread regex DFA cache (see [tuning](#tuning)) |
+
+<!-- REVIEW: confirm --scan-threads / --dfa-cache-mb flag names and that both default to 0 in args.rs. -->
 
 ## Policies
 
@@ -42,48 +46,73 @@ you'd expect: cloud providers (AWS, GCP, Azure), source forges (GitHub, GitLab,
 Bitbucket), messaging and payments (Slack, Stripe, Twilio, SendGrid), AI vendors
 (OpenAI, Anthropic), package registries, PEM private-key blocks, JWTs, and a
 family of generic high-entropy assignment rules for `key`/`secret`/`token`/
-`password`-named fields. Because it's the upstream gitleaks ruleset, any shape
-gitleaks detects, gnaw detects.
+`password`-named fields.
 
-A rule fires only when its keyword appears in the file (a fast prefilter), then
-the regex and entropy gate confirm the match — so a file with no candidate
-keywords is skipped cheaply, and the full ruleset only runs against files that
-could plausibly contain a secret.
+gnaw adapts gitleaks' Go (RE2) patterns to Rust's `regex` engine. The two are
+close relatives, so the vast majority compile verbatim; a rule that uses a
+construct Rust's engine rejects is skipped rather than failing the whole
+ruleset, and the compile rate is checked whenever the vendored ruleset is
+refreshed.
 
-{% aside(kind="note", title="Staying current") %}
-The vendored ruleset is refreshed by a scheduled CI job that pulls the latest
-gitleaks release and opens a PR, so coverage tracks upstream without a manual
-sync. The exact ruleset version a build ships is stamped into the vendored file.
-{% end %}
+## Where gnaw deliberately differs from gitleaks
 
-An allowlist suppresses known false positives — for example AWS's
-`AKIAIOSFODNN7EXAMPLE` documentation key — so those won't be reported or
-redacted. Rule-level allowlists from the gitleaks ruleset (stopwords like
-`EXAMPLE`/`example`, and per-rule path exceptions) are honored as well.
+gnaw is **not** a byte-for-byte gitleaks. A few targeted overrides live in
+gnaw's code (not the vendored TOML, so they survive ruleset updates), each
+trading a specific false positive or false negative:
 
-{% aside(kind="note", title="What it catches, and what it can't") %}
-Rules anchored on a distinctive prefix (`ghp_`, `AKIA`, `sk-ant-`, …) are the
-most reliable — the prefix plus entropy makes a confident match. A secret with
-no recognizable prefix is only caught when it appears in a recognizable
-assignment (`api_key = "…"`) via a generic rule; a bare, unprefixed,
-unassigned blob on its own line won't match, by design, to avoid flooding the
-report with false positives. Treat scanning as strong risk reduction, not proof
-the output is clean.
-{% end %}
+**Recovered credential families.** gitleaks' `generic-api-key` rule treats the
+whole match as the secret and suppresses by *variable name*, which silently
+misses `access_token` / `auth_token` / `password` / `client_secret` assignments.
+gnaw scopes the rule to the assigned **value** instead, recovering those
+families. The cost is that a high-entropy hash sitting in a credential-named
+variable could look like a secret — so gnaw pairs the change with a value-shape
+allowlist that suppresses md5/sha/UUID/SRI-shaped values. The accepted residual:
+a real secret that is *itself* exactly hash- or UUID-shaped gets allowlisted.
 
-## Path allowlist
+**Private keys.** gnaw replaces the vendored `private-key` pattern with one that
+requires a full `-----END … PRIVATE KEY-----` marker to close and at least one
+full-length base64 run in the body. This does two things the stock pattern
+doesn't: it stops a short/truncated placeholder block from lazily consuming a
+following real key's `BEGIN` marker (a detection bypass), and it keeps
+documentation placeholders — which have no real key material — out of the
+report. Modern single-line keys (Ed25519 and similar) are detected.
 
-`--secret-scan-allow` (and the `secret_scan_allow_paths` config key) hold
-**substring** fragments, not globs — `tests/` skips any path containing that
-segment. When the list is empty, gnaw falls back to a built-in default set:
+The practical upshot: gnaw aims to be **more precise on placeholders and more
+thorough on real credentials** than the stock ruleset, not merely equal to it.
+Where it diverges, it diverges on purpose and in code you can read.
 
-```text
-/tests/   /test/   /fixtures/   /testdata/   /__tests__/   _test.
-```
+## Tuning
 
-Setting any fragment replaces the defaults entirely — you then own the full
-list. Allowlisted files are skipped completely, so a real secret inside one is
-not detected.
+Secret scanning is the memory- and CPU-heavy part of a run. Two flags let you
+trade throughput against footprint; both default to a value gnaw picks for you,
+and most users never touch them.
+
+| Flag | `0` (default) means | Raise to | Lower to |
+| --- | --- | --- | --- |
+| `--scan-threads` | auto (a capped share of your cores) | scan faster on a big host | cap memory |
+| `--dfa-cache-mb` | built-in default | (rarely needed) | cap per-thread cache |
+
+<!-- REVIEW: confirm the default-resolution wording (auto = min(N, cores)) and the built-in DFA default against secret_scan.rs / gitleaks.rs. -->
+
+The scan runs on a bounded thread pool so it doesn't crowd out the rest of the
+pipeline, and rule regexes compile lazily — a rule whose keyword never appears
+in your content is never compiled — so scanning a repo that uses few credential
+shapes stays cheap.
+
+## Ordering in the pipeline
+
+Scanning runs **after** compression and **before** token counting. So a secret
+inside a function body that compression already stripped never reaches the
+scanner, and when you `redact`, the reported token total reflects the scrubbed
+output.
+
+## Path allowlisting
+
+`--secret-scan-allow <FRAGMENT>` skips any file whose path contains the given
+substring; repeat the flag for several fragments. With no fragments supplied,
+gnaw uses a built-in set aimed at test and fixture directories, so intentional
+fake keys in your test suite don't light up the report. Supplying your own
+fragments replaces the built-in set.
 
 ## .gnawconfig keys
 
@@ -98,3 +127,5 @@ secret_scan_allow_paths = ["tests/", "fixtures/"]
 ```
 
 Resolution order is **CLI flag → `.gnawconfig` → built-in default**.
+
+<!-- REVIEW: --scan-threads / --dfa-cache-mb are intentionally NOT listed as .gnawconfig keys because they were kept CLI-only (not added to TomlConfig). Confirm that's still the case; if you added them to TomlConfig, document them here. -->
