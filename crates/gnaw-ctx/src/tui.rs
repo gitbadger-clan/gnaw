@@ -506,8 +506,7 @@ impl TuiApp {
     /// Handle a message using the Elm/Redux pattern.
     /// This uses the pure Model::update() function and executes any side effects.
     fn handle_message(&mut self, message: Message) -> Result<()> {
-        let (new_model, cmd) = self.model.update(message);
-        self.model = new_model;
+        let cmd = self.model.update(message);
 
         // Execute any side effects
         self.execute_cmd(cmd)?;

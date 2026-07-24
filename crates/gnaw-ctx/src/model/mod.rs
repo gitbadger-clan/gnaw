@@ -941,15 +941,26 @@ impl Model {
 
             Message::TokenCounted { path, tokens } => {
                 // Ignore results invalidated by an encoding change (key removed).
-                if let std::collections::hash_map::Entry::Occupied(mut e) =
-                    new_model.token_states.entry(path)
-                {
-                    let state = match tokens {
+                if let Some(slot) = new_model.token_states.get_mut(&path) {
+                    let old_done = match slot {
+                        TokenState::Done(n) => *n,
+                        _ => 0,
+                    };
+                    let new_done = tokens.unwrap_or(0);
+                    *slot = match tokens {
                         Some(n) => TokenState::Done(n),
                         None => TokenState::Failed,
                     };
-                    e.insert(state);
-                    new_model.recompute_selected_token_total();
+
+                    // Delta-patch the % denominator. A full recompute here is
+                    // O(files) and this arm fires once per file, so rescanning
+                    // makes the whole count pass quadratic. Every *selection*
+                    // change still does a full recompute, which keeps the
+                    // invariant honest.
+                    if old_done != new_done && new_model.session.is_file_selected(&path) {
+                        new_model.selected_token_total =
+                            (new_model.selected_token_total + new_done).saturating_sub(old_done);
+                    }
 
                     // Quiescent (no Pending/Counting left)? The count set is now stable,
                     // so aggregates are complete — refresh and sort exactly once.
