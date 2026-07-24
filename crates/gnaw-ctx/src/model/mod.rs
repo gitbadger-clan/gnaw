@@ -527,32 +527,32 @@ impl Model {
         searching || editing_template
     }
 
-    pub fn update(&self, message: Message) -> (Self, Cmd) {
-        let mut new_model = self.clone();
+    pub fn update(&mut self, message: Message) -> Cmd {
+        let mut new_model = &mut *self;
 
         match message {
             Message::Quit => {
                 new_model.should_quit = true;
                 new_model.status_message = "Goodbye!".to_string();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::EnterCommandMode => {
                 new_model.command_line = Some(String::new());
                 new_model.status_message.clear();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::ExitCommandMode => {
                 new_model.command_line = None;
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::CommandInputChar(c) => {
                 if let Some(buf) = new_model.command_line.as_mut() {
                     buf.push(c);
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::CommandInputBackspace => {
@@ -563,7 +563,7 @@ impl Model {
                     }
                     _ => new_model.command_line = None,
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::ExecuteCommand => {
@@ -635,18 +635,18 @@ impl Model {
                         }
                     }
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::SwitchTab(tab) => {
                 new_model.current_tab = tab;
                 new_model.status_message = format!("Switched to {:?} tab", tab);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::RefreshFileTree => {
                 new_model.status_message = "Refreshing file tree...".to_string();
-                (new_model, Cmd::RefreshFileTree)
+                Cmd::RefreshFileTree
             }
 
             Message::UpdateSearchQuery(query) => {
@@ -654,7 +654,7 @@ impl Model {
                 new_model.search_history_pos = None; // live typing leaves history-browsing
                 new_model.tree_cursor = 0;
                 new_model.file_tree_scroll = 0;
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::EnterSearchMode => {
@@ -664,7 +664,7 @@ impl Model {
                 new_model.file_tree_scroll = 0;
                 new_model.file_tree_input_mode = FileTreeInputMode::Search;
                 new_model.status_message = "Search mode - Type to search, Esc to exit".to_string();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::ExitSearchMode => {
@@ -682,7 +682,7 @@ impl Model {
                 new_model.search_history_pos = None;
                 new_model.file_tree_input_mode = FileTreeInputMode::Browsing;
                 new_model.status_message = "Exited search mode".to_string();
-                (new_model, Cmd::None)
+                Cmd::None
             }
             Message::SearchHistoryPrev => {
                 if !new_model.search_history.is_empty() {
@@ -696,7 +696,7 @@ impl Model {
                     new_model.tree_cursor = 0;
                     new_model.file_tree_scroll = 0;
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
             Message::MoveTreeCursor(delta) => {
                 let visible_nodes = crate::utils::get_visible_nodes(
@@ -716,7 +716,7 @@ impl Model {
                     };
                     new_model.tree_cursor = new_cursor;
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::MoveSettingsCursor(delta) => {
@@ -736,7 +736,7 @@ impl Model {
                     };
                     new_model.settings.settings_cursor = new_cursor;
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::ToggleFileSelection(index) => {
@@ -816,7 +816,7 @@ impl Model {
                     if scheduled {
                         new_model.token_debounce_gen += 1;
                         let debounce_gen = new_model.token_debounce_gen;
-                        return (new_model, Cmd::ScheduleTokenCount(debounce_gen));
+                        return Cmd::ScheduleTokenCount(debounce_gen);
                     }
 
                     let busy = new_model
@@ -827,7 +827,7 @@ impl Model {
                         new_model.refresh_tree_aggregates_and_sort();
                     }
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::SelectMatches | Message::DeselectMatches => {
@@ -893,7 +893,7 @@ impl Model {
                 if scheduled {
                     new_model.token_debounce_gen += 1;
                     let debounce_gen = new_model.token_debounce_gen;
-                    return (new_model, Cmd::ScheduleTokenCount(debounce_gen));
+                    return Cmd::ScheduleTokenCount(debounce_gen);
                 }
 
                 // Deselect, or everything already counted: refresh now if nothing's in flight.
@@ -904,13 +904,13 @@ impl Model {
                 if !busy {
                     new_model.refresh_tree_aggregates_and_sort();
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::FlushTokenQueue(debounce_gen) => {
                 // Stale flush from a superseded debounce — drop it.
                 if debounce_gen != new_model.token_debounce_gen {
-                    return (new_model, Cmd::None);
+                    return Cmd::None;
                 }
                 let pending: Vec<PathBuf> = new_model
                     .token_states
@@ -933,9 +933,9 @@ impl Model {
                 }
 
                 if to_count.is_empty() {
-                    (new_model, Cmd::None)
+                    Cmd::None
                 } else {
-                    (new_model, Cmd::CountTokens { paths: to_count })
+                    Cmd::CountTokens { paths: to_count }
                 }
             }
 
@@ -972,7 +972,7 @@ impl Model {
                         new_model.refresh_tree_aggregates_and_sort();
                     }
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::InitialTokenScan => {
@@ -993,9 +993,9 @@ impl Model {
                 if scheduled {
                     new_model.token_debounce_gen += 1;
                     let debounce_gen = new_model.token_debounce_gen;
-                    (new_model, Cmd::ScheduleTokenCount(debounce_gen))
+                    Cmd::ScheduleTokenCount(debounce_gen)
                 } else {
-                    (new_model, Cmd::None)
+                    Cmd::None
                 }
             }
             Message::ExpandDirectory(index) => {
@@ -1021,7 +1021,7 @@ impl Model {
                     ) {
                         new_model.status_message =
                             format!("Failed to ensure path exists for {}: {}", name, e);
-                        return (new_model, Cmd::None);
+                        return Cmd::None;
                     }
 
                     // Find and expand the node in the tree
@@ -1036,7 +1036,7 @@ impl Model {
                                 {
                                     new_model.status_message =
                                         format!("Failed to load children for {}: {}", name, e);
-                                    return (new_model, Cmd::None);
+                                    return Cmd::None;
                                 }
                                 new_model.status_message = format!("Expanded {}", name);
                             } else {
@@ -1051,7 +1051,7 @@ impl Model {
                         new_model.status_message = format!("Could not find directory {}", name);
                     }
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::CollapseDirectory(index) => {
@@ -1086,7 +1086,7 @@ impl Model {
                         new_model.status_message = format!("Could not find directory {}", name);
                     }
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::ToggleSetting(index) => {
@@ -1101,7 +1101,7 @@ impl Model {
                 } else {
                     new_model.status_message = format!("Invalid setting index: {}", index);
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::CycleSetting(index) => {
@@ -1129,12 +1129,12 @@ impl Model {
                         }
                         new_model.token_debounce_gen += 1;
                         let debounce_gen = new_model.token_debounce_gen;
-                        return (new_model, Cmd::ScheduleTokenCount(debounce_gen));
+                        return Cmd::ScheduleTokenCount(debounce_gen);
                     }
                 } else {
                     new_model.status_message = format!("Invalid setting index: {}", index);
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::RunAnalysis => {
@@ -1148,10 +1148,10 @@ impl Model {
                         template_content: new_model.template.get_template_content().to_string(),
                         user_variables: new_model.template.variables.user_variables.clone(),
                     };
-                    (new_model, cmd)
+                    cmd
                 } else {
                     new_model.status_message = "Analysis already in progress...".to_string();
-                    (new_model, Cmd::None)
+                    Cmd::None
                 }
             }
 
@@ -1169,12 +1169,12 @@ impl Model {
                     "Analysis complete! {} tokens, {} files",
                     tokens, results.file_count
                 );
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::AnalysisProgress(stage) => {
                 new_model.prompt_output.analysis_stage = Some(stage);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::AnalysisError(error) => {
@@ -1182,16 +1182,16 @@ impl Model {
                 new_model.prompt_output.analysis_stage = None;
                 new_model.prompt_output.analysis_error = Some(error.clone());
                 new_model.status_message = format!("Analysis failed: {}", error);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::CopyToClipboard => {
                 if let Some(prompt) = &new_model.prompt_output.generated_prompt {
                     let cmd = Cmd::CopyToClipboard(prompt.clone());
-                    (new_model, cmd)
+                    cmd
                 } else {
                     new_model.status_message = "No prompt to copy".to_string();
-                    (new_model, Cmd::None)
+                    Cmd::None
                 }
             }
 
@@ -1201,10 +1201,10 @@ impl Model {
                         filename,
                         content: prompt.clone(),
                     };
-                    (new_model, cmd)
+                    cmd
                 } else {
                     new_model.status_message = "No prompt to save".to_string();
-                    (new_model, Cmd::None)
+                    Cmd::None
                 }
             }
 
@@ -1222,7 +1222,7 @@ impl Model {
                         .saturating_add(delta as u16)
                 };
                 new_model.prompt_output.output_scroll = new_scroll;
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::CycleStatisticsView(direction) => {
@@ -1234,7 +1234,7 @@ impl Model {
                 new_model.statistics.scroll = 0;
                 new_model.status_message =
                     format!("Switched to {} view", new_model.statistics.view.as_str());
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::ScrollStatistics(delta) => {
@@ -1244,7 +1244,7 @@ impl Model {
                     new_model.statistics.scroll.saturating_add(delta as u16)
                 };
                 new_model.statistics.scroll = new_scroll;
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::SaveTemplate(filename) => {
@@ -1254,14 +1254,14 @@ impl Model {
                     content,
                 };
                 new_model.status_message = "Saving template...".to_string();
-                (new_model, cmd)
+                cmd
             }
 
             Message::ReloadTemplate => {
                 new_model.template.editor = crate::model::template::EditorState::default();
                 new_model.template.sync_variables_with_template();
                 new_model.status_message = "Reloaded template".to_string();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::LoadTemplate => {
@@ -1275,13 +1275,13 @@ impl Model {
                         new_model.status_message = format!("Failed to load template: {}", e);
                     }
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::RefreshTemplates => {
                 new_model.template.picker.refresh();
                 new_model.status_message = "Templates refreshed".to_string();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::SetTemplateFocus(focus, mode) => {
@@ -1294,13 +1294,13 @@ impl Model {
                         .move_to_first_missing_variable();
                 }
                 new_model.status_message = format!("Template focus: {:?} ({:?})", focus, mode);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::SetTemplateFocusMode(mode) => {
                 new_model.template.set_focus_mode(mode);
                 new_model.status_message = format!("Template mode: {:?}", mode);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::TemplateEditorInput(key) => {
@@ -1308,7 +1308,7 @@ impl Model {
                 new_model.template.editor.sync_content_from_textarea();
                 new_model.template.editor.validate_template();
                 new_model.template.sync_variables_with_template();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::TemplatePickerMove(delta) => {
@@ -1317,7 +1317,7 @@ impl Model {
                 } else {
                     new_model.template.picker.move_cursor_up();
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableStartEditing(var_name) => {
@@ -1325,17 +1325,17 @@ impl Model {
                 new_model.template.variables.show_variable_input = true;
                 new_model.template.variables.variable_input_content.clear();
                 new_model.status_message = format!("Editing variable: {}", var_name);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableInputChar(c) => {
                 new_model.template.variables.add_char_to_input(c);
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableInputBackspace => {
                 new_model.template.variables.remove_char_from_input();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableInputEnter => {
@@ -1343,20 +1343,20 @@ impl Model {
                     new_model.status_message = format!("Set {} = {}", var_name, value);
                     new_model.template.sync_variables_with_template();
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableInputCancel => {
                 new_model.template.variables.cancel_editing();
                 new_model.status_message = "Cancelled variable editing".to_string();
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableNavigateUp => {
                 if new_model.template.variables.cursor > 0 {
                     new_model.template.variables.cursor -= 1;
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
 
             Message::VariableNavigateDown => {
