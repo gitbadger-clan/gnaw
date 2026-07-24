@@ -137,6 +137,50 @@ cargo install --path crates/gnaw
 
 [![Star History Chart](https://api.star-history.com/svg?repos=gitbadger-clan/gnaw&type=Date)](https://star-history.com/#gitbadger/gnaw&Date)
 
+## 📊 Benchmarks
+
+gnaw benchmarks itself against other repo-to-prompt tools ([repomix](https://github.com/yamadashy/repomix), [repomix-rs](https://github.com/sopaco/repomix-rs), [code2prompt](https://github.com/mufeedvh/code2prompt), [yek](https://github.com/mohsen1/yek)) on two axes, each with its own reproducible Docker image:
+
+- **Throughput & peak memory on a real repo** — wall time (hyperfine), peak RSS, CPU utilization, and emitted file counts, with secret scanning on and off.
+- **Memory scaling on generated corpora** — peak RSS plotted against corpus size (256 MB–8 GB of deterministic filler), to distinguish streaming from buffering behavior.
+
+Both images pin every tool's version and normalize Rust build flags, so measured deltas reflect algorithms, not build configuration.
+
+### Run the real-repo comparison
+
+Requires Docker; the corpus repo is cloned at image build.
+
+```sh
+docker build -f benchmarks/Dockerfile -t gnaw-bench .
+docker run --rm --cpus 8 --memory 8g \
+  -v "$PWD:/out" \
+  gnaw-bench \
+  xtask bench-secret-inner --repo /corpus --out /out/bench.json
+```
+
+### Run the memory-scaling sweep
+
+Corpus sizes are baked at image build via `CORPUS_SIZES_MB`; `bench-wrap` records OOM-killed runs as data points instead of losing them.
+
+```sh
+docker build -f benchmarks/Dockerfile.memscale -t gnaw-bench-mem .
+for mb in 256 1024 2048 4096 8192; do
+  docker run --rm --cpus 8 --memory 8g \
+    -v "$PWD:/out" \
+    gnaw-bench-mem \
+    bench-wrap xtask bench-secret-inner --repo /corpus-${mb}m --out /out/secret_${mb}m.json
+done
+```
+
+### Reading the numbers honestly
+
+- Run on a **Linux host** for representative I/O, keep `--cpus`/`--memory` fixed across runs, and pin the corpus to a commit SHA when citing results.
+- **File counts must match** (within ~1%) before timing comparisons mean anything — a tool that's faster on fewer files isn't faster.
+- The generated corpus is a *memory* workload, not a speed workload — don't quote timing from the memscale image, and don't compare numbers across the two images.
+- Node-based tools carry runtime startup in both time and RSS; the reports disclose this per-row.
+
+Full methodology and results: [unicow.dev](https://unicow.dev/blog/context-compressor/).
+
 ## 🍴 Forked from code2prompt
 
 gnaw began as a fork of [code2prompt](https://github.com/mufeedvh/code2prompt) by [Mufeed VH](https://github.com/mufeedvh) and contributors, and owes its foundation to that project. It carries forward the core idea — turning a codebase into a single, well-structured LLM prompt — while taking the tooling in a Rust-native direction and adding new capabilities:
@@ -156,7 +200,7 @@ Licensed under either of
 
 at your option.
 
-Portions of this project are derived from [code2prompt](https://github.com/mufeedvh/code2prompt) and remain under its original MIT license; that copyright notice is retained in [LICENSE-MIT](https://github.com/gitbadger/gnaw/blob/main/LICENSE-MIT).
+Portions of this project are derived from [code2prompt](https://github.com/mufeedvh/code2prompt) and remain under its original MIT license; that copyright notice is retained in [LICENSE-MIT](https://github.com/gitbadger-clan/gnaw/blob/main/LICENSE-MIT).
 
 ### Contribution
 
