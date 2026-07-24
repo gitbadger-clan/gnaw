@@ -11,7 +11,6 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use futures_util::FutureExt;
 use gnaw_core::session::SelectionState;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
@@ -69,6 +68,7 @@ impl TuiApp {
     }
 
     // ~~~ Optimized Main Loop ~~~
+    // ~~~ Optimized Main Loop ~~~
     pub async fn run(&mut self) -> Result<()> {
         self.handle_message(Message::RefreshFileTree)?;
 
@@ -80,7 +80,14 @@ impl TuiApp {
             let animating = self.model.prompt_output.analysis_in_progress;
 
             tokio::select! {
-                // Branch 1: next terminal event.
+                // Branch 1: next terminal event. events.next() lives ONLY here,
+                // in the select. Do NOT poll it opportunistically elsewhere:
+                // the old burst-drain called events.next().now_or_never() and
+                // dropped the future while pending, which desyncs crossterm's
+                // reader-thread protocol and permanently stops terminal reads
+                // (the first-keypress freeze). select!'s own cancellation of a
+                // pending next() across iterations is the supported usage;
+                // mid-poll drop from now_or_never was not.
                 maybe_event = events.next() => {
                     match maybe_event {
                         Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
