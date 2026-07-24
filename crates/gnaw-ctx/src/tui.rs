@@ -95,28 +95,10 @@ impl TuiApp {
                             if let Some(message) = self.handle_key_event(ratatui_key) {
                                 self.handle_message(message)?;
                             }
-
-                            // Drain any events already queued this same wakeup
-                            // so a burst (held key / fast scroll) costs one
-                            // redraw, not one per event. now_or_never() returns
-                            // None the moment the stream isn't immediately ready.
-                            while let Some(ready) = events.next().now_or_never() {
-                                match ready {
-                                    Some(Ok(Event::Key(k))) if k.kind == KeyEventKind::Press => {
-                                        let rk = self.convert_crossterm_key(k);
-                                        if let Some(msg) = self.handle_key_event(rk) {
-                                            self.handle_message(msg)?;
-                                        }
-                                    }
-                                    Some(Ok(_)) => {}          // ready, not a keypress
-                                    Some(Err(e)) => return Err(e.into()),
-                                    None => break,             // stream ended
-                                }
-                            }
                         }
-                        Some(Ok(_)) => {}
+                        Some(Ok(_)) => {}          // resize, mouse, release — ignored
                         Some(Err(e)) => return Err(e.into()),
-                        None => break,
+                        None => break,             // stream ended
                     }
                 }
 
@@ -126,6 +108,9 @@ impl TuiApp {
                 maybe_msg = self.message_rx.recv() => {
                     if let Some(message) = maybe_msg {
                         self.handle_message(message)?;
+                        while let Ok(more) = self.message_rx.try_recv() {
+                            self.handle_message(more)?;
+                        }
                     }
                 }
 
