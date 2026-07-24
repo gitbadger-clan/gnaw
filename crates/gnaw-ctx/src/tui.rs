@@ -643,15 +643,24 @@ impl TuiApp {
             }
 
             Cmd::CountTokens { paths } => {
-                // BPE tokenization is CPU-bound → spawn_blocking so it doesn't stall
-                // the async runtime. Stream one TokenCounted per file as it completes.
                 let tx = self.message_tx.clone();
                 let config = self.model.session.config.clone();
+
                 tokio::task::spawn_blocking(move || {
-                    for path in paths {
-                        let tokens = gnaw_adapters::path::count_file_tokens(&path, &config);
-                        let _ = tx.send(Message::TokenCounted { path, tokens });
-                    }
+                    use rayon::prelude::*;
+                    // Parallel count on the rayon pool (the CLI counts at
+                    // cpu×~7; serial here was the bulk of the TUI's startup
+                    // gap on big repos). Chunked so per-file messages still
+                    // stream for progressive UI fill without per-send churn.
+                    paths.par_chunks(64).for_each(|chunk| {
+                        for path in chunk {
+                            let tokens = gnaw_adapters::path::count_file_tokens(path, &config);
+                            let _ = tx.send(Message::TokenCounted {
+                                path: path.clone(),
+                                tokens,
+                            });
+                        }
+                    });
                 });
             }
             Cmd::CopyToClipboard(content) => match copy_to_clipboard(&content) {
