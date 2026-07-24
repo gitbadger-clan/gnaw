@@ -1364,8 +1364,47 @@ impl Model {
                 if new_model.template.variables.cursor < variables.len().saturating_sub(1) {
                     new_model.template.variables.cursor += 1;
                 }
-                (new_model, Cmd::None)
+                Cmd::None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    fn fixture_model() -> Model {
+        // Whatever your Model constructor is over a tiny in-memory or tmpdir tree.
+        // Keep it deterministic — sort traversal, fixed paths — or the snapshot
+        // won't be byte-stable across runs.
+        todo!("build a Model over a 2-3 file fixture")
+    }
+
+    #[test]
+    fn update_sequence_is_stable() {
+        let mut m = fixture_model(); // small tmpdir tree
+        let msgs = [
+            Message::EnterSearchMode,
+            Message::UpdateSearchQuery("src".into()),
+            Message::SelectMatches,
+            Message::TokenCounted {
+                path: "src/a.rs".into(),
+                tokens: Some(42),
+            },
+            Message::MoveTreeCursor(3),
+            Message::ToggleFileSelection(1),
+        ];
+        // On main: `let (next, _) = m.update(msg); m = next;`
+        // After:   `let _ = m.update(msg);`
+        for msg in msgs {
+            let _ = m.update(msg);
+        }
+        insta::assert_debug_snapshot!((
+            m.selected_token_total,
+            m.tree_cursor,
+            &m.status_message,
+            m.token_states.len(),
+        ));
     }
 }
