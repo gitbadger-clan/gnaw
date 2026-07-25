@@ -81,6 +81,14 @@ pub enum SizeFilter {
     LessThan(usize),
 }
 
+fn tree_sort_less(a: &DisplayFileNode, b: &DisplayFileNode) -> bool {
+    match (a.is_directory, b.is_directory) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => a.name < b.name,
+    }
+}
+
 /// Hierarchical file node for TUI display with proper parent-child relationships
 #[derive(Debug, Clone)]
 pub struct DisplayFileNode {
@@ -296,8 +304,12 @@ pub enum Message {
     CollapseDirectory(usize),
     MoveTreeCursor(i32),
     RefreshFileTree,
-    /// Background tree walk finished — swap in the built tree.
-    FileTreeReady(Vec<DisplayFileNode>),
+
+    /// A single node discovered by the background walk. Merged into the tree
+    /// at its sorted position as it arrives.
+    FileNodeDiscovered(DisplayFileNode),
+    /// Walk finished — tree is complete, kick off aggregation + token scan.
+    FileTreeComplete,
     /// Background tree walk failed; carry the message for the status bar.
     FileTreeError(String),
 
@@ -532,7 +544,7 @@ impl Model {
     }
 
     pub fn update(&mut self, message: Message) -> Cmd {
-        let mut new_model = &mut *self;
+        let new_model = &mut *self;
 
         match message {
             Message::Quit => {
@@ -653,10 +665,24 @@ impl Model {
                 Cmd::RefreshFileTree
             }
 
-            Message::FileTreeReady(tree) => {
-                new_model.file_tree_nodes = tree;
+            Message::FileNodeDiscovered(node) => {
+                // Roots only (walk is depth-1), so this is an ordered insert into
+                // the top level. Binary-search the sorted position so the tree
+                // doesn't visibly reshuffle as nodes land — each arrives already
+                // in its final place.
+                let nodes = &mut new_model.file_tree_nodes;
+                let pos = nodes.partition_point(|existing| {
+                    tree_sort_less(existing, &node) // same key as the batch sort
+                });
+                nodes.insert(pos, node);
+                Cmd::None
+            }
+
+            Message::FileTreeComplete => {
                 new_model.status_message =
                     "File tree loaded with patterns applied and files auto-expanded".to_string();
+                // Tree is stable now — safe to aggregate + sort by weight if needed.
+                new_model.refresh_tree_aggregates_and_sort();
                 Cmd::None
             }
 
@@ -808,11 +834,11 @@ impl Model {
                         let leaves =
                             crate::utils::collect_files_under(&node_path, &new_model.session);
                         for p in leaves {
-                            if toggle_leaf(p, &mut new_model, &mut scheduled) {
+                            if toggle_leaf(p, new_model, &mut scheduled) {
                                 changed += 1;
                             }
                         }
-                    } else if toggle_leaf(node_path.clone(), &mut new_model, &mut scheduled) {
+                    } else if toggle_leaf(node_path.clone(), new_model, &mut scheduled) {
                         changed = 1;
                     }
 
@@ -1160,11 +1186,10 @@ impl Model {
                     new_model.status_message = "Running analysis...".to_string();
                     new_model.current_tab = Tab::PromptOutput; // Switch to output tab
 
-                    let cmd = Cmd::RunAnalysis {
+                    Cmd::RunAnalysis {
                         template_content: new_model.template.get_template_content().to_string(),
                         user_variables: new_model.template.variables.user_variables.clone(),
-                    };
-                    cmd
+                    }
                 } else {
                     new_model.status_message = "Analysis already in progress...".to_string();
                     Cmd::None
@@ -1203,8 +1228,7 @@ impl Model {
 
             Message::CopyToClipboard => {
                 if let Some(prompt) = &new_model.prompt_output.generated_prompt {
-                    let cmd = Cmd::CopyToClipboard(prompt.clone());
-                    cmd
+                    Cmd::CopyToClipboard(prompt.clone())
                 } else {
                     new_model.status_message = "No prompt to copy".to_string();
                     Cmd::None
@@ -1213,11 +1237,10 @@ impl Model {
 
             Message::SaveToFile(filename) => {
                 if let Some(prompt) = &new_model.prompt_output.generated_prompt {
-                    let cmd = Cmd::SaveToFile {
+                    Cmd::SaveToFile {
                         filename,
                         content: prompt.clone(),
-                    };
-                    cmd
+                    }
                 } else {
                     new_model.status_message = "No prompt to save".to_string();
                     Cmd::None

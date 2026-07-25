@@ -591,23 +591,19 @@ impl TuiApp {
             }
 
             Cmd::RefreshFileTree => {
-                // Hand the walk to a worker; keep the main loop drawing. session needs to
-                // be cheaply shareable into the task — clone the config/roots it needs, or
-                // wrap in Arc. Don't move &mut self.model.session across the await.
                 let tx = self.message_tx.clone();
-                let session = self.model.session.clone(); // or Arc<…>, whichever is cheaper
+                let session = self.model.session.clone();
                 tokio::spawn(async move {
-                    // build_file_tree_from_session is sync/CPU-bound → spawn_blocking so it
-                    // doesn't stall a runtime worker that other tasks share.
-                    let result = tokio::task::spawn_blocking(move || {
+                    let tx2 = tx.clone();
+                    let walk = tokio::task::spawn_blocking(move || {
                         let mut session = session;
-                        build_file_tree_from_session(&mut session)
+                        stream_file_tree(&mut session, &tx2) // sends FileNodeDiscovered per node
                     })
                     .await;
 
-                    match result {
-                        Ok(Ok(tree)) => {
-                            let _ = tx.send(Message::FileTreeReady(tree));
+                    match walk {
+                        Ok(Ok(())) => {
+                            let _ = tx.send(Message::FileTreeComplete);
                             let _ = tx.send(Message::InitialTokenScan);
                         }
                         Ok(Err(e)) => {

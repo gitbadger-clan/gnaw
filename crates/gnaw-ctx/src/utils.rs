@@ -3,7 +3,7 @@
 //! This module contains helper functions for building file trees,
 //! managing file operations, and other utility functions used throughout the TUI.
 
-use crate::model::DisplayFileNode;
+use crate::model::{DisplayFileNode, Message};
 use crate::model::{SizeFilter, TokenState};
 use anyhow::Result;
 use globset::GlobSet;
@@ -61,44 +61,34 @@ pub fn collect_selected_files_in_tree(
     }
     out
 }
-/// Build hierarchical file tree from session using traverse_directory with SelectionEngine
-pub fn build_file_tree_from_session(session: &mut SelectionState) -> Result<Vec<DisplayFileNode>> {
-    let mut root_nodes = Vec::new();
 
-    // Build root level nodes using ignore crate to respect gitignore
+pub fn stream_file_tree(
+    session: &mut SelectionState,
+    tx: &tokio::sync::mpsc::UnboundedSender<Message>, // match your actual sender type
+) -> Result<()> {
     use ignore::WalkBuilder;
     let walker = WalkBuilder::new(&session.config.path)
         .max_depth(Some(1))
-        .git_ignore(!session.config.no_ignore) // Respect the no_ignore flag
-        .hidden(!session.config.hidden) // Also respect the hidden flag for consistency
+        .git_ignore(!session.config.no_ignore)
+        .hidden(!session.config.hidden)
         .build();
 
     for entry in walker {
         let entry = entry?;
         let path = entry.path();
-
         if path == session.config.path {
-            continue; // Skip root directory itself
+            continue;
         }
-
         let mut node = DisplayFileNode::new(path.to_path_buf(), 0);
-
-        // Auto-expand recursively if directory contains selected files
         if node.is_directory {
             auto_expand_recursively(&mut node, session);
         }
-
-        root_nodes.push(node);
+        // Ship it the moment it's ready. UI merges + re-sorts on arrival.
+        if tx.send(Message::FileNodeDiscovered(node)).is_err() {
+            break; // receiver gone (app quit) — stop walking
+        }
     }
-
-    // Sort root nodes: directories first, then alphabetically
-    root_nodes.sort_by(|a, b| match (a.is_directory, b.is_directory) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.cmp(&b.name),
-    });
-
-    Ok(root_nodes)
+    Ok(())
 }
 
 /// Recursively auto-expand directories that contain selected files
