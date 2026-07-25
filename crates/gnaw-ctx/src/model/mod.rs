@@ -1412,38 +1412,113 @@ impl Model {
 #[cfg(test)]
 mod update_tests {
     use super::*;
+    use gnaw_core::configuration::GnawConfig;
+    use std::fs;
+    use tempfile::{TempDir, tempdir};
+    use tokio::sync::mpsc;
 
-    fn fixture_model() -> Model {
-        // Whatever your Model constructor is over a tiny in-memory or tmpdir tree.
-        // Keep it deterministic — sort traversal, fixed paths — or the snapshot
-        // won't be byte-stable across runs.
-        todo!("build a Model over a 2-3 file fixture")
+    /// Build a Model over a tiny, fixed tree by driving the real streaming path:
+    /// run `stream_file_tree` synchronously, then feed each `FileNodeDiscovered`
+    /// back through `update`, exactly as the live TUI does. Deterministic — the
+    /// walk order is sorted by the `FileNodeDiscovered` insert, so no snapshot
+    /// flake. Returns the TempDir so it outlives the Model (dropping it would
+    /// delete the files out from under any later selection check).
+    fn fixture_model() -> (Model, TempDir) {
+        let dir = tempdir().expect("temp dir");
+        for (path, content) in [
+            ("src/a.rs", "fn a() {}\n"),
+            ("src/b.rs", "fn b() {}\n"),
+            ("README.md", "# hi\n"),
+        ] {
+            let full = dir.path().join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, content).unwrap();
+        }
+
+        // Canonicalize so config.path and any joined paths agree on macOS's
+        // /var -> /private/var symlink. Without this, strip_prefix mismatches
+        // and selection silently fails to match.
+        let root = dir.path().canonicalize().expect("canonicalize tmpdir");
+
+        let config = GnawConfig::builder()
+            .path(root.clone())
+            .build()
+            .expect("config");
+        let mut session = SelectionState::new(config);
+
+        // Drive the streaming builder synchronously into a channel, then merge
+        // every discovered node through `update` — the same arm the TUI uses.
+        let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+        crate::utils::stream_file_tree(&mut session, &tx).expect("stream");
+        drop(tx); // close the channel so the drain loop terminates
+
+        let mut model = Model::new(session);
+        while let Ok(msg) = rx.try_recv() {
+            let _ = model.update(msg); // FileNodeDiscovered → sorted insert
+        }
+        // The live path fires FileTreeComplete after the stream drains.
+        let _ = model.update(Message::FileTreeComplete);
+
+        (model, dir)
     }
 
     #[test]
     fn update_sequence_is_stable() {
-        let mut m = fixture_model(); // small tmpdir tree
+        let (mut m, _dir) = fixture_model();
+
+        // Tree built: 2 roots (README.md, src/) after the depth-1 walk.
+        assert_eq!(m.file_tree_nodes.len(), 2);
+
         let msgs = [
             Message::EnterSearchMode,
             Message::UpdateSearchQuery("src".into()),
             Message::SelectMatches,
-            Message::TokenCounted {
-                path: "src/a.rs".into(),
-                tokens: Some(42),
-            },
-            Message::MoveTreeCursor(3),
-            Message::ToggleFileSelection(1),
+            Message::MoveTreeCursor(1),
         ];
-        // On main: `let (next, _) = m.update(msg); m = next;`
-        // After:   `let _ = m.update(msg);`
         for msg in msgs {
             let _ = m.update(msg);
         }
-        insta::assert_debug_snapshot!((
-            m.selected_token_total,
-            m.tree_cursor,
-            &m.status_message,
-            m.token_states.len(),
-        ));
+
+        // Invariants that must survive the &mut self refactor.
+        assert_eq!(m.file_tree_input_mode, FileTreeInputMode::Search);
+        assert_eq!(m.search_query, "src");
+        // No TokenCounted has landed, so no Done tokens exist → denominator is 0.
+        // This guards the delta-total path from counting on selection alone.
+        assert_eq!(m.selected_token_total, 0);
     }
+
+    /// Exercises the delta-total path directly: select, then feed a real
+    /// TokenCounted for a path that's actually in token_states, and assert the
+    /// denominator picks it up exactly once.
+    #[test]
+    fn token_counted_updates_total_once() {
+        let (mut m, _dir) = fixture_model();
+
+        // With no include patterns and deselected_by_default = false, every file
+        // is selected by default. So we don't toggle — src/a.rs is already
+        // selected. Just queue it and feed a count.
+        let target = m.session.config.path.join("src").join("a.rs");
+        assert!(m.session.is_file_selected(&target), "default-selected");
+
+        m.token_states.insert(target.clone(), TokenState::Pending);
+        m.recompute_selected_token_total();
+        assert_eq!(m.selected_token_total, 0, "nothing Done yet");
+
+        m.update(Message::TokenCounted {
+            path: target.clone(),
+            tokens: Some(42),
+        });
+        assert_eq!(m.selected_token_total, 42, "first count adds 42");
+
+        m.update(Message::TokenCounted {
+            path: target,
+            tokens: Some(42),
+        });
+        assert_eq!(
+            m.selected_token_total, 42,
+            "identical re-count must not double"
+        );
+    }
+
+    // Flatten a tree into its leaf (file) paths.
 }
