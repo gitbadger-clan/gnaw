@@ -36,10 +36,33 @@ use crate::widgets::{
 use gnaw_adapters::ExplicitSelector;
 use gnaw_core::pipeline::{SourceOpts, run};
 
-use crate::utils::build_file_tree_from_session;
+use crate::utils::stream_file_tree;
 /// Quiet window after the last selection before a count batch fires.
 const TOKEN_DEBOUNCE_MS: u64 = 200;
+/// Which scroll family a message belongs to (for coalescing), or None if it's
+/// not a coalescable scroll.
+fn coalesce_key(m: &Message) -> Option<u8> {
+    match m {
+        Message::MoveTreeCursor(_) => Some(0),
+        Message::ScrollOutput(_) => Some(1),
+        Message::ScrollStatistics(_) => Some(2),
+        _ => None,
+    }
+}
 
+/// Sum two same-family scroll messages into one. Assumes same variant (checked
+/// by the caller via coalesce_key equality).
+fn merge_scroll(a: Message, b: Message) -> Message {
+    match (a, b) {
+        (Message::MoveTreeCursor(x), Message::MoveTreeCursor(y)) => Message::MoveTreeCursor(x + y),
+        (Message::ScrollOutput(x), Message::ScrollOutput(y)) => Message::ScrollOutput(x + y),
+        (Message::ScrollStatistics(x), Message::ScrollStatistics(y)) => {
+            Message::ScrollStatistics(x + y)
+        }
+        // caller guarantees same family; unreachable, but return the newer as a safe fallback
+        (_, b) => b,
+    }
+}
 pub struct TuiApp {
     model: Model,
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -117,9 +140,52 @@ impl TuiApp {
                 // None = all senders dropped (tasks gone); nothing to do.
                 maybe_msg = self.message_rx.recv() => {
                     if let Some(message) = maybe_msg {
-                        self.handle_message(message)?;
-                        while let Ok(more) = self.message_rx.try_recv() {
-                            self.handle_message(more)?;
+                        // Coalesce a bounded batch. Consecutive scroll deltas
+                        // (MoveTreeCursor/ScrollOutput/ScrollStatistics) commute —
+                        // N steps == one N-sized step — so we sum them and apply
+                        // once. Any non-scroll message flushes the accumulated
+                        // scroll and is then handled normally: a newer action
+                        // supersedes a backlog of scrolls instead of waiting
+                        // behind it (the "scroll runs on" feel when you stop).
+                        let mut pending_scroll: Option<Message> = None;
+                        let mut budget = 64;
+
+                        let feed = |this: &mut Self, msg: Message, pending: &mut Option<Message>| -> Result<()> {
+                            match (coalesce_key(&msg), pending.take()) {
+                                // same scroll kind as what's pending → merge deltas
+                                (Some(k), Some(prev)) if coalesce_key(&prev) == Some(k) => {
+                                    *pending = Some(merge_scroll(prev, msg));
+                                }
+                                // a scroll, but different kind pending → flush old, hold new
+                                (Some(_), Some(prev)) => {
+                                    this.handle_message(prev)?;
+                                    *pending = Some(msg);
+                                }
+                                // a scroll, nothing pending → hold it
+                                (Some(_), None) => {
+                                    *pending = Some(msg);
+                                }
+                                // not a scroll → flush any pending scroll, then handle this
+                                (None, prev) => {
+                                    if let Some(prev) = prev {
+                                        this.handle_message(prev)?;
+                                    }
+                                    this.handle_message(msg)?;
+                                }
+                            }
+                            Ok(())
+                        };
+
+                        feed(self, message, &mut pending_scroll)?;
+                        while budget > 0 {
+                            match self.message_rx.try_recv() {
+                                Ok(more) => { feed(self, more, &mut pending_scroll)?; budget -= 1; }
+                                Err(_) => break,
+                            }
+                        }
+                        // Flush whatever scroll is still accumulated.
+                        if let Some(msg) = pending_scroll {
+                            self.handle_message(msg)?;
                         }
                     }
                 }
