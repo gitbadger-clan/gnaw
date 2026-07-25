@@ -296,6 +296,10 @@ pub enum Message {
     CollapseDirectory(usize),
     MoveTreeCursor(i32),
     RefreshFileTree,
+    /// Background tree walk finished — swap in the built tree.
+    FileTreeReady(Vec<DisplayFileNode>),
+    /// Background tree walk failed; carry the message for the status bar.
+    FileTreeError(String),
 
     /// A background count finished (tokens=None means binary/empty/failed).
     TokenCounted {
@@ -647,6 +651,18 @@ impl Model {
             Message::RefreshFileTree => {
                 new_model.status_message = "Refreshing file tree...".to_string();
                 Cmd::RefreshFileTree
+            }
+
+            Message::FileTreeReady(tree) => {
+                new_model.file_tree_nodes = tree;
+                new_model.status_message =
+                    "File tree loaded with patterns applied and files auto-expanded".to_string();
+                Cmd::None
+            }
+
+            Message::FileTreeError(e) => {
+                new_model.status_message = format!("Error loading files: {e}");
+                Cmd::None
             }
 
             Message::UpdateSearchQuery(query) => {

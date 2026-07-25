@@ -70,6 +70,16 @@ impl TuiApp {
     // ~~~ Optimized Main Loop ~~~
     // ~~~ Optimized Main Loop ~~~
     pub async fn run(&mut self) -> Result<()> {
+        // Paint the shell immediately so the alt-screen isn't blank while we walk
+        // the tree. file_tree_nodes is empty here; the FileTree widget renders an
+        // empty list, which is fine — the status bar carries the "why".
+        self.model.status_message = "Scanning repository…".to_string();
+        {
+            let Self {
+                terminal, model, ..
+            } = self;
+            terminal.draw(|frame| TuiApp::render_with_model(model, frame))?;
+        }
         self.handle_message(Message::RefreshFileTree)?;
 
         let mut events = EventStream::new();
@@ -515,20 +525,33 @@ impl TuiApp {
             }
 
             Cmd::RefreshFileTree => {
-                // Always use session-based tree building for proper pattern initialization
-                match build_file_tree_from_session(&mut self.model.session) {
-                    Ok(tree) => {
-                        self.model.file_tree_nodes = tree;
-                        self.model.status_message =
-                            "File tree loaded with patterns applied and files auto-expanded"
-                                .to_string();
-                        // Count files that started out selected.
-                        let _ = self.message_tx.send(Message::InitialTokenScan);
+                // Hand the walk to a worker; keep the main loop drawing. session needs to
+                // be cheaply shareable into the task — clone the config/roots it needs, or
+                // wrap in Arc. Don't move &mut self.model.session across the await.
+                let tx = self.message_tx.clone();
+                let session = self.model.session.clone(); // or Arc<…>, whichever is cheaper
+                tokio::spawn(async move {
+                    // build_file_tree_from_session is sync/CPU-bound → spawn_blocking so it
+                    // doesn't stall a runtime worker that other tasks share.
+                    let result = tokio::task::spawn_blocking(move || {
+                        let mut session = session;
+                        build_file_tree_from_session(&mut session)
+                    })
+                    .await;
+
+                    match result {
+                        Ok(Ok(tree)) => {
+                            let _ = tx.send(Message::FileTreeReady(tree));
+                            let _ = tx.send(Message::InitialTokenScan);
+                        }
+                        Ok(Err(e)) => {
+                            let _ = tx.send(Message::FileTreeError(e.to_string()));
+                        }
+                        Err(join) => {
+                            let _ = tx.send(Message::FileTreeError(join.to_string()));
+                        }
                     }
-                    Err(e) => {
-                        self.model.status_message = format!("Error loading files: {}", e);
-                    }
-                }
+                });
             }
 
             Cmd::RunAnalysis {
