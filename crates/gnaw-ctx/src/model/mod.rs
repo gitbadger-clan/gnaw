@@ -186,6 +186,20 @@ impl DisplayFileNode {
     }
 }
 
+/// One row of the flattened, filtered tree — everything render and the
+/// index-based update arms need, owned, no subtree. Cheap to build from a
+/// Cow::Borrowed entry (a couple of small clones per row, no children).
+#[derive(Debug, Clone)]
+pub struct VisibleRow {
+    pub path: PathBuf,
+    pub name: String,
+    pub level: usize,
+    pub is_directory: bool,
+    pub is_expanded: bool,
+    pub is_selected: bool,
+    pub agg_tokens: Option<usize>,
+}
+
 /// Collapse every directory in the tree. Children stay loaded (children_loaded
 /// untouched) so re-expanding is instant and doesn't re-walk the filesystem.
 fn collapse_all(nodes: &mut [DisplayFileNode]) {
@@ -369,6 +383,12 @@ pub struct Model {
     pub should_quit: bool,
     pub file_tree_input_mode: FileTreeInputMode,
     pub file_tree_nodes: Vec<DisplayFileNode>,
+    /// Memoized flattened visible tree. Rebuilt lazily when dirty; reused
+    /// across animation-tick redraws, which is the whole point — the 80ms
+    /// spinner tick must not re-filter 26k nodes.
+    pub visible_cache: Vec<VisibleRow>,
+    pub visible_dirty: bool,
+
     pub search_query: String,
     pub tree_cursor: usize,
     pub file_tree_scroll: u16,
@@ -406,6 +426,8 @@ impl Default for Model {
             should_quit: false,
             file_tree_input_mode: FileTreeInputMode::Browsing,
             file_tree_nodes: Vec::new(),
+            visible_cache: Vec::new(),
+            visible_dirty: true,
             search_query: String::new(),
             tree_cursor: 0,
             file_tree_scroll: 0,
@@ -427,6 +449,22 @@ impl Default for Model {
 }
 
 impl Model {
+    /// Recompute the visible rows if anything invalidated them; otherwise
+    /// reuse. Callers read `self.visible_cache` after this returns.
+    pub fn ensure_visible_cache(&mut self) {
+        if !self.visible_dirty {
+            return;
+        }
+        self.visible_cache = crate::utils::get_visible_nodes(
+            &mut self.file_tree_nodes,
+            &self.search_query,
+            self.size_filter,
+            &self.token_states,
+            &mut self.session,
+        );
+        self.visible_dirty = false;
+    }
+
     pub fn new(session: SelectionState) -> Self {
         Model {
             session,
@@ -434,6 +472,8 @@ impl Model {
             should_quit: false,
             file_tree_input_mode: FileTreeInputMode::Browsing,
             file_tree_nodes: Vec::new(),
+            visible_cache: Vec::new(),
+            visible_dirty: true,
             search_query: String::new(),
             tree_cursor: 0,
             file_tree_scroll: 0,
@@ -505,33 +545,23 @@ impl Model {
         }
 
         // 2. Capture the path under the cursor before the order changes.
-        let cursor_path = {
-            let vis = crate::utils::get_visible_nodes(
-                &self.file_tree_nodes,
-                &self.search_query,
-                self.size_filter,
-                &self.token_states,
-                &mut self.session,
-            );
-            vis.get(self.tree_cursor).map(|d| d.node.path.clone())
-        };
+        self.ensure_visible_cache();
+        let cursor_path = self
+            .visible_cache
+            .get(self.tree_cursor)
+            .map(|r| r.path.clone());
 
         // 3. Reorder.
         let by_weight = self.tree_sort_mode == TreeSortMode::TokenWeight;
         sort_recursive(&mut self.file_tree_nodes, by_weight);
 
-        // 4. Restore the cursor to wherever that path landed.
-        if let Some(path) = cursor_path {
-            let vis = crate::utils::get_visible_nodes(
-                &self.file_tree_nodes,
-                &self.search_query,
-                self.size_filter,
-                &self.token_states,
-                &mut self.session,
-            );
-            if let Some(idx) = vis.iter().position(|d| d.node.path == path) {
-                self.tree_cursor = idx;
-            }
+        // 4. Restore: the sort changed row order — force a rebuild before reading.
+        self.visible_dirty = true;
+        self.ensure_visible_cache();
+        if let Some(path) = cursor_path
+            && let Some(idx) = self.visible_cache.iter().position(|r| r.path == path)
+        {
+            self.tree_cursor = idx;
         }
     }
 
@@ -544,6 +574,23 @@ impl Model {
     }
 
     pub fn update(&mut self, message: Message) -> Cmd {
+        // Invalidate the visible-row cache only when the message can change the
+        // row set. Cursor/scroll moves never do. TokenCounted changes only live-
+        // read suffix/spinner state (widget reads token_states directly) — it
+        // affects the row set solely when a size filter is judging Done counts.
+        // Without this carve-out, a count pass dirties per message and search
+        // mode re-runs its filesystem-walking rebuild per batch — the halt.
+        let preserves_visible = match &message {
+            Message::MoveTreeCursor(_)
+            | Message::ScrollOutput(_)
+            | Message::ScrollStatistics(_)
+            | Message::MoveSettingsCursor(_) => true,
+            Message::TokenCounted { .. } => self.size_filter.is_none(),
+            _ => false,
+        };
+        if !preserves_visible {
+            self.visible_dirty = true;
+        }
         let new_model = &mut *self;
 
         match message {
@@ -741,14 +788,8 @@ impl Model {
                 Cmd::None
             }
             Message::MoveTreeCursor(delta) => {
-                let visible_nodes = crate::utils::get_visible_nodes(
-                    &new_model.file_tree_nodes,
-                    &new_model.search_query,
-                    new_model.size_filter,
-                    &new_model.token_states,
-                    &mut new_model.session,
-                );
-                let visible_count = visible_nodes.len();
+                new_model.ensure_visible_cache();
+                let visible_count = new_model.visible_cache.len();
 
                 if visible_count > 0 {
                     let new_cursor = if delta > 0 {
@@ -782,114 +823,101 @@ impl Model {
             }
 
             Message::ToggleFileSelection(index) => {
-                let visible_nodes = crate::utils::get_visible_nodes(
-                    &new_model.file_tree_nodes,
-                    &new_model.search_query,
-                    new_model.size_filter,
-                    &new_model.token_states,
-                    &mut new_model.session,
-                );
-
-                if let Some(display_node) = visible_nodes.get(index) {
-                    let node_path = display_node.node.path.clone();
-                    let name = display_node.node.name.clone();
-                    let is_directory = display_node.node.is_directory;
-
-                    // `display_node.is_selected` is the descendant-aware truth the user
-                    // sees (for a dir: "any child selected"). Move the subtree to the
-                    // opposite of that.
-                    let select = !display_node.is_selected;
-
-                    let mut scheduled = false;
-                    let mut changed = 0usize;
-
-                    // Toggle one leaf toward `select`, with the same Pending dedup guard
-                    // ToggleFileSelection/SelectMatches already use.
-                    let toggle_leaf =
-                        |path: PathBuf, model: &mut Model, scheduled: &mut bool| -> bool {
-                            if model.session.is_file_selected(&path) == select {
-                                return false; // already in desired state
-                            }
-                            model.session.toggle_file_selection(path.clone());
-                            if select
-                                && !matches!(
-                                    model.token_states.get(&path),
-                                    Some(TokenState::Done(_))
-                                        | Some(TokenState::Counting)
-                                        | Some(TokenState::Pending)
-                                )
-                            {
-                                model.token_states.insert(path, TokenState::Pending);
-                                *scheduled = true;
-                            }
-                            true
-                        };
-
-                    if is_directory {
-                        // Operate on leaves, never on the directory path itself. A
-                        // directory-level action is LOWER specificity than the per-file
-                        // actions select-all/deselect-all stamp on every leaf, so it would
-                        // be silently overridden. Per-leaf actions are same-specificity and
-                        // more recent, so they win the precedence tie-break.
-                        let leaves =
-                            crate::utils::collect_files_under(&node_path, &new_model.session);
-                        for p in leaves {
-                            if toggle_leaf(p, new_model, &mut scheduled) {
-                                changed += 1;
-                            }
-                        }
-                    } else if toggle_leaf(node_path.clone(), new_model, &mut scheduled) {
-                        changed = 1;
-                    }
-
-                    let verb = if select { "Selected" } else { "Deselected" };
-                    let extra = if is_directory { " (and contents)" } else { "" };
-                    new_model.status_message = if changed == 0 {
-                        format!(
-                            "{name} already {}",
-                            if select { "selected" } else { "deselected" }
+                new_model.ensure_visible_cache();
+                let Some((node_path, name, is_directory, was_selected)) =
+                    new_model.visible_cache.get(index).map(|r| {
+                        (
+                            r.path.clone(),
+                            r.name.clone(),
+                            r.is_directory,
+                            r.is_selected,
                         )
-                    } else {
-                        format!("{verb} {name}{extra}")
+                    })
+                else {
+                    return Cmd::None;
+                };
+                let select = !was_selected;
+
+                let mut scheduled = false;
+                let mut changed = 0usize;
+
+                // Toggle one leaf toward `select`, with the same Pending dedup guard
+                // ToggleFileSelection/SelectMatches already use.
+                let toggle_leaf =
+                    |path: PathBuf, model: &mut Model, scheduled: &mut bool| -> bool {
+                        if model.session.is_file_selected(&path) == select {
+                            return false; // already in desired state
+                        }
+                        model.session.toggle_file_selection(path.clone());
+                        if select
+                            && !matches!(
+                                model.token_states.get(&path),
+                                Some(TokenState::Done(_))
+                                    | Some(TokenState::Counting)
+                                    | Some(TokenState::Pending)
+                            )
+                        {
+                            model.token_states.insert(path, TokenState::Pending);
+                            *scheduled = true;
+                        }
+                        true
                     };
 
-                    new_model.recompute_selected_token_total();
-
-                    if scheduled {
-                        new_model.token_debounce_gen += 1;
-                        let debounce_gen = new_model.token_debounce_gen;
-                        return Cmd::ScheduleTokenCount(debounce_gen);
+                if is_directory {
+                    // Operate on leaves, never on the directory path itself. A
+                    // directory-level action is LOWER specificity than the per-file
+                    // actions select-all/deselect-all stamp on every leaf, so it would
+                    // be silently overridden. Per-leaf actions are same-specificity and
+                    // more recent, so they win the precedence tie-break.
+                    let leaves = crate::utils::collect_files_under(&node_path, &new_model.session);
+                    for p in leaves {
+                        if toggle_leaf(p, new_model, &mut scheduled) {
+                            changed += 1;
+                        }
                     }
-
-                    let busy = new_model
-                        .token_states
-                        .values()
-                        .any(|s| matches!(s, TokenState::Pending | TokenState::Counting));
-                    if !busy {
-                        new_model.refresh_tree_aggregates_and_sort();
-                    }
+                } else if toggle_leaf(node_path.clone(), new_model, &mut scheduled) {
+                    changed = 1;
                 }
+
+                let verb = if select { "Selected" } else { "Deselected" };
+                let extra = if is_directory { " (and contents)" } else { "" };
+                new_model.status_message = if changed == 0 {
+                    format!(
+                        "{name} already {}",
+                        if select { "selected" } else { "deselected" }
+                    )
+                } else {
+                    format!("{verb} {name}{extra}")
+                };
+
+                new_model.recompute_selected_token_total();
+
+                if scheduled {
+                    new_model.token_debounce_gen += 1;
+                    let debounce_gen = new_model.token_debounce_gen;
+                    return Cmd::ScheduleTokenCount(debounce_gen);
+                }
+
+                let busy = new_model
+                    .token_states
+                    .values()
+                    .any(|s| matches!(s, TokenState::Pending | TokenState::Counting));
+                if !busy {
+                    new_model.refresh_tree_aggregates_and_sort();
+                }
+
                 Cmd::None
             }
 
             Message::SelectMatches | Message::DeselectMatches => {
                 let select = matches!(message, Message::SelectMatches);
 
-                let visible_nodes = crate::utils::get_visible_nodes(
-                    &new_model.file_tree_nodes,
-                    &new_model.search_query,
-                    new_model.size_filter,
-                    &new_model.token_states,
-                    &mut new_model.session,
-                );
-
-                // Visible *leaves* only. Never bulk-toggle a directory node — that would
-                // pull in its hidden, non-matching children, which is exactly the surprise
-                // we're trying to remove.
-                let leaves: Vec<PathBuf> = visible_nodes
+                new_model.ensure_visible_cache();
+                let leaves: Vec<PathBuf> = new_model
+                    .visible_cache
                     .iter()
-                    .filter(|d| !d.node.is_directory)
-                    .map(|d| d.node.path.clone())
+                    .filter(|r| !r.is_directory)
+                    .map(|r| r.path.clone())
                     .collect();
 
                 let mut changed = 0usize;
@@ -1041,92 +1069,82 @@ impl Model {
                 }
             }
             Message::ExpandDirectory(index) => {
-                let visible_nodes = crate::utils::get_visible_nodes(
-                    &new_model.file_tree_nodes,
-                    &new_model.search_query,
-                    new_model.size_filter,
-                    &new_model.token_states,
+                new_model.ensure_visible_cache();
+                let Some((node_path, name)) = new_model
+                    .visible_cache
+                    .get(index)
+                    .filter(|r| r.is_directory)
+                    .map(|r| (r.path.clone(), r.name.clone()))
+                else {
+                    return Cmd::None;
+                };
+
+                // Ensure the path exists in the tree first
+                if let Err(e) = crate::utils::ensure_path_exists_in_tree(
+                    &mut new_model.file_tree_nodes,
+                    &node_path,
                     &mut new_model.session,
-                );
+                ) {
+                    new_model.status_message =
+                        format!("Failed to ensure path exists for {}: {}", name, e);
+                    return Cmd::None;
+                }
 
-                if let Some(display_node) = visible_nodes.get(index)
-                    && display_node.node.is_directory
-                {
-                    let node_path = display_node.node.path.clone();
-                    let name = display_node.node.name.clone();
-
-                    // Ensure the path exists in the tree first
-                    if let Err(e) = crate::utils::ensure_path_exists_in_tree(
-                        &mut new_model.file_tree_nodes,
-                        &node_path,
-                        &mut new_model.session,
-                    ) {
-                        new_model.status_message =
-                            format!("Failed to ensure path exists for {}: {}", name, e);
-                        return Cmd::None;
-                    }
-
-                    // Find and expand the node in the tree
-                    let mut found = false;
-                    for root_node in &mut new_model.file_tree_nodes {
-                        if let Some(node) = root_node.find_node_mut(&node_path) {
-                            if !node.is_expanded {
-                                node.is_expanded = true;
-                                // Load children if not already loaded
-                                if !node.children_loaded
-                                    && let Err(e) = node.load_children(&mut new_model.session)
-                                {
-                                    new_model.status_message =
-                                        format!("Failed to load children for {}: {}", name, e);
-                                    return Cmd::None;
-                                }
-                                new_model.status_message = format!("Expanded {}", name);
-                            } else {
-                                new_model.status_message = format!("{} is already expanded", name);
+                // Find and expand the node in the tree
+                let mut found = false;
+                for root_node in &mut new_model.file_tree_nodes {
+                    if let Some(node) = root_node.find_node_mut(&node_path) {
+                        if !node.is_expanded {
+                            node.is_expanded = true;
+                            // Load children if not already loaded
+                            if !node.children_loaded
+                                && let Err(e) = node.load_children(&mut new_model.session)
+                            {
+                                new_model.status_message =
+                                    format!("Failed to load children for {}: {}", name, e);
+                                return Cmd::None;
                             }
-                            found = true;
-                            break;
+                            new_model.status_message = format!("Expanded {}", name);
+                        } else {
+                            new_model.status_message = format!("{} is already expanded", name);
                         }
+                        found = true;
+                        break;
                     }
+                }
 
-                    if !found {
-                        new_model.status_message = format!("Could not find directory {}", name);
-                    }
+                if !found {
+                    new_model.status_message = format!("Could not find directory {}", name);
                 }
                 Cmd::None
             }
 
             Message::CollapseDirectory(index) => {
-                let visible_nodes = crate::utils::get_visible_nodes(
-                    &new_model.file_tree_nodes,
-                    &new_model.search_query,
-                    new_model.size_filter,
-                    &new_model.token_states,
-                    &mut new_model.session,
-                );
+                new_model.ensure_visible_cache();
+                let Some((node_path, name)) = new_model
+                    .visible_cache
+                    .get(index)
+                    .filter(|r| r.is_directory)
+                    .map(|r| (r.path.clone(), r.name.clone()))
+                else {
+                    return Cmd::None;
+                };
 
-                if let Some(display_node) = visible_nodes.get(index)
-                    && display_node.node.is_directory
-                {
-                    let node_path = display_node.node.path.clone();
-                    let name = display_node.node.name.clone();
-
-                    // Find and collapse the node in the tree
-                    let mut found = false;
-                    for root_node in &mut new_model.file_tree_nodes {
-                        if let Some(node) = root_node.find_node_mut(&node_path)
-                            && node.is_expanded
-                        {
-                            node.is_expanded = false;
-                            new_model.status_message = format!("Collapsed {}", name);
-                            found = true;
-                            break;
-                        }
+                // Find and collapse the node in the tree
+                let mut found = false;
+                for root_node in &mut new_model.file_tree_nodes {
+                    if let Some(node) = root_node.find_node_mut(&node_path)
+                        && node.is_expanded
+                    {
+                        node.is_expanded = false;
+                        new_model.status_message = format!("Collapsed {}", name);
+                        found = true;
+                        break;
                     }
+                }
 
-                    if !found {
-                        new_model.status_message = format!("Could not find directory {}", name);
-                    }
+                if !found {
+                    new_model.status_message = format!("Could not find directory {}", name);
                 }
                 Cmd::None
             }

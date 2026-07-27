@@ -3,7 +3,7 @@
 //! This module contains helper functions for building file trees,
 //! managing file operations, and other utility functions used throughout the TUI.
 
-use crate::model::{DisplayFileNode, Message};
+use crate::model::{DisplayFileNode, Message, VisibleRow};
 use crate::model::{SizeFilter, TokenState};
 use anyhow::Result;
 use globset::GlobSet;
@@ -141,26 +141,162 @@ pub(crate) fn directory_contains_selected_files(
     false
 }
 
-/// Get visible nodes for display (flattened tree with search filtering)
-pub fn get_visible_nodes(
+fn passes_filters(
+    node: &DisplayFileNode,
+    matcher: &QueryMatcher,
+    size_filter: Option<SizeFilter>,
+    token_states: &HashMap<PathBuf, TokenState>,
+) -> bool {
+    let passes_name = matches!(matcher, QueryMatcher::MatchAll)
+        || matches(matcher, &node.name)
+        || matches(matcher, &node.path.to_string_lossy());
+    let passes_size = match (size_filter, node.is_directory) {
+        (None, _) | (Some(_), true) => true,
+        (Some(filter), false) => match token_states.get(&node.path) {
+            Some(TokenState::Done(n)) => match filter {
+                SizeFilter::GreaterThan(t) => *n > t,
+                SizeFilter::LessThan(t) => *n < t,
+            },
+            _ => false,
+        },
+    };
+    passes_name && passes_size
+}
+
+fn node_is_selected(node: &DisplayFileNode, session: &mut SelectionState) -> bool {
+    if node.is_directory {
+        dir_is_selected(node, session)
+    } else {
+        let relative = node
+            .path
+            .strip_prefix(&session.config.path)
+            .unwrap_or(&node.path);
+        session.is_file_selected(relative)
+    }
+}
+
+/// Build one row from a node. `is_expanded` is passed in because the search
+/// path displays every directory as open for context without touching the
+/// real tree's expansion state.
+fn row_for(node: &DisplayFileNode, is_selected: bool, is_expanded: bool) -> VisibleRow {
+    VisibleRow {
+        path: node.path.clone(),
+        name: node.name.clone(),
+        level: node.level,
+        is_directory: node.is_directory,
+        is_expanded,
+        is_selected,
+        agg_tokens: node.agg_tokens,
+    }
+}
+
+/// Search mode. A directory is included if it matches *or* anything beneath it
+/// does, so children must be resolved before the parent is emitted — hence the
+/// per-directory scratch Vec. Rows are flat (no subtree), so that scratch is a
+/// handful of small clones, not a deep copy.
+///
+/// Takes `&mut` because children are loaded into the persistent tree:
+/// `children_loaded` makes every subsequent keystroke's rebuild pure in-memory
+/// instead of a disk walk.
+fn collect_visible_search(
+    nodes: &mut [DisplayFileNode],
+    matcher: &QueryMatcher,
+    size_filter: Option<SizeFilter>,
+    token_states: &HashMap<PathBuf, TokenState>,
+    session: &mut SelectionState,
+    out: &mut Vec<VisibleRow>,
+) {
+    for node in nodes.iter_mut() {
+        let mut child_rows = Vec::new();
+        if node.is_directory {
+            if !node.children_loaded {
+                let _ = node.load_children(session);
+            }
+            collect_visible_search(
+                &mut node.children,
+                matcher,
+                size_filter,
+                token_states,
+                session,
+                &mut child_rows,
+            );
+        }
+
+        let matches_current = passes_filters(node, matcher, size_filter, token_states);
+        let include_self = matches_current || !child_rows.is_empty();
+        if include_self {
+            let is_selected = node_is_selected(node, session);
+            // Directories render as expanded in search results; files are never
+            // expanded, and `node.is_directory` is false for them.
+            out.push(row_for(node, is_selected, node.is_directory));
+            out.append(&mut child_rows);
+        }
+    }
+}
+
+/// Normal mode: flatten the tree honoring real expansion state. No filesystem
+/// access, no tree mutation — everything visible is already loaded.
+fn collect_visible_normal(
     nodes: &[DisplayFileNode],
+    matcher: &QueryMatcher,
+    size_filter: Option<SizeFilter>,
+    token_states: &HashMap<PathBuf, TokenState>,
+    session: &mut SelectionState,
+    out: &mut Vec<VisibleRow>,
+) {
+    for node in nodes {
+        if !passes_filters(node, matcher, size_filter, token_states) {
+            continue;
+        }
+        let is_selected = node_is_selected(node, session);
+        out.push(row_for(node, is_selected, node.is_expanded));
+        // Only descend if the directory is expanded.
+        if node.is_directory && node.is_expanded {
+            collect_visible_normal(
+                &node.children,
+                matcher,
+                size_filter,
+                token_states,
+                session,
+                out,
+            );
+        }
+    }
+}
+
+/// Get visible rows for display (flattened tree with search filtering).
+///
+/// `nodes` is `&mut` because the search path memoizes loaded children into the
+/// tree. The return value is fully owned, so no borrow of `nodes` outlives the
+/// call — callers are free to mutate the tree immediately afterwards.
+pub fn get_visible_nodes(
+    nodes: &mut [DisplayFileNode],
     search_query: &str,
     size_filter: Option<SizeFilter>,
     token_states: &HashMap<PathBuf, TokenState>,
     session: &mut SelectionState,
-) -> Vec<DisplayNodeWithSelection> {
-    let mut visible = Vec::new();
-    let search_active = !search_query.is_empty();
+) -> Vec<VisibleRow> {
     let matcher = build_query_matcher(search_query);
-    collect_visible_nodes_recursive(
-        nodes,
-        &matcher,
-        size_filter,
-        token_states,
-        session,
-        &mut visible,
-        search_active,
-    );
+    let mut visible = Vec::new();
+    if search_query.is_empty() {
+        collect_visible_normal(
+            nodes,
+            &matcher,
+            size_filter,
+            token_states,
+            session,
+            &mut visible,
+        );
+    } else {
+        collect_visible_search(
+            nodes,
+            &matcher,
+            size_filter,
+            token_states,
+            session,
+            &mut visible,
+        );
+    }
     visible
 }
 
@@ -217,125 +353,6 @@ fn matches(m: &QueryMatcher, text: &str) -> bool {
     }
 }
 
-/// Node with selection state for display
-#[derive(Debug, Clone)]
-pub struct DisplayNodeWithSelection {
-    pub node: DisplayFileNode,
-    pub is_selected: bool,
-}
-
-/// Recursively collect visible nodes
-fn collect_visible_nodes_recursive(
-    nodes: &[DisplayFileNode],
-    matcher: &QueryMatcher,
-    size_filter: Option<SizeFilter>,
-    token_states: &HashMap<PathBuf, TokenState>,
-    session: &mut SelectionState,
-    visible: &mut Vec<DisplayNodeWithSelection>,
-    search_active: bool,
-) {
-    for node in nodes {
-        let passes_name = if matches!(matcher, QueryMatcher::MatchAll) {
-            true
-        } else {
-            matches(matcher, &node.name) || matches(matcher, &node.path.to_string_lossy())
-        };
-
-        // Size filter: files judged by their Done token count; dirs always pass
-        // (their visibility comes from surviving descendants). A file with no count
-        // can't satisfy a size filter, so it's hidden while a filter is active.
-        let passes_size = match (size_filter, node.is_directory) {
-            (None, _) => true,
-            (Some(_), true) => true,
-            (Some(filter), false) => match token_states.get(&node.path) {
-                Some(TokenState::Done(n)) => match filter {
-                    SizeFilter::GreaterThan(t) => *n > t,
-                    SizeFilter::LessThan(t) => *n < t,
-                },
-                _ => false,
-            },
-        };
-        let matches_current = passes_name && passes_size;
-
-        if search_active {
-            // In search mode, traverse into directories regardless of expansion
-            let mut child_results: Vec<DisplayNodeWithSelection> = Vec::new();
-            if node.is_directory {
-                let children = get_children_for_search(node, session);
-                collect_visible_nodes_recursive(
-                    &children,
-                    matcher,
-                    size_filter,
-                    token_states,
-                    session,
-                    &mut child_results,
-                    true,
-                );
-            }
-
-            let include_self = matches_current || !child_results.is_empty();
-
-            if include_self {
-                let relative_path = if let Ok(rel) = node.path.strip_prefix(&session.config.path) {
-                    rel
-                } else {
-                    &node.path
-                };
-                let is_selected = if node.is_directory {
-                    dir_is_selected(node, session)
-                } else {
-                    session.is_file_selected(relative_path)
-                };
-
-                // Show directories as expanded in search results for better context
-                let mut node_clone = node.clone();
-                if node_clone.is_directory {
-                    node_clone.is_expanded = true;
-                }
-
-                visible.push(DisplayNodeWithSelection {
-                    node: node_clone,
-                    is_selected,
-                });
-
-                visible.extend(child_results);
-            }
-        } else {
-            // Normal mode: only include node if it matches (empty query matches all)
-            if matches_current {
-                let relative_path = if let Ok(rel) = node.path.strip_prefix(&session.config.path) {
-                    rel
-                } else {
-                    &node.path
-                };
-                let is_selected = if node.is_directory {
-                    dir_is_selected(node, session)
-                } else {
-                    session.is_file_selected(relative_path)
-                };
-
-                visible.push(DisplayNodeWithSelection {
-                    node: node.clone(),
-                    is_selected,
-                });
-
-                // Only descend if the directory is expanded
-                if node.is_directory && node.is_expanded {
-                    collect_visible_nodes_recursive(
-                        &node.children,
-                        matcher,
-                        size_filter,
-                        token_states,
-                        session,
-                        visible,
-                        false,
-                    );
-                }
-            }
-        }
-    }
-}
-
 /// Save content to a file
 pub fn save_to_file(path: &Path, content: &str) -> Result<()> {
     std::fs::write(path, content)?;
@@ -372,56 +389,6 @@ pub fn format_number(num: usize, format: &gnaw_core::tokenizer::TokenFormat) -> 
             result
         }
     }
-}
-
-/// Load children for search mode without mutating the original tree
-fn get_children_for_search(
-    node: &DisplayFileNode,
-    session: &mut SelectionState,
-) -> Vec<DisplayFileNode> {
-    if !node.is_directory {
-        return Vec::new();
-    }
-
-    if node.children_loaded {
-        return node.children.clone();
-    }
-
-    // Load children on the fly without mutating the original tree
-    let mut children: Vec<DisplayFileNode> = Vec::new();
-
-    // Use ignore crate to respect gitignore
-    use ignore::WalkBuilder;
-    let walker = WalkBuilder::new(&node.path)
-        .max_depth(Some(1))
-        .git_ignore(!session.config.no_ignore) // Respect the no_ignore flag
-        .hidden(!session.config.hidden) // Also respect the hidden flag for consistency
-        .build();
-
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if path == node.path {
-            continue;
-        }
-
-        let mut child = DisplayFileNode::new(path.to_path_buf(), node.level + 1);
-
-        // Auto-expand if contains selected files
-        if child.is_directory && directory_contains_selected_files(&child.path, session) {
-            child.is_expanded = true;
-        }
-
-        children.push(child);
-    }
-
-    // Sort children: directories first, then alphabetically
-    children.sort_by(|a, b| match (a.is_directory, b.is_directory) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.cmp(&b.name),
-    });
-
-    children
 }
 
 /// Save template to custom directory

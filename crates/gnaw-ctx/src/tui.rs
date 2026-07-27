@@ -195,7 +195,7 @@ impl TuiApp {
                 // truly sleeps (zero idle CPU) instead of waking at 60fps.
                 _ = tokio::time::sleep(std::time::Duration::from_millis(80)), if animating => {}
             }
-
+            self.model.ensure_visible_cache();
             let Self {
                 terminal, model, ..
             } = self;

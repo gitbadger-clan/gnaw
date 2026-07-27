@@ -56,29 +56,25 @@ impl<'a> StatefulWidget for FileSelectionWidget<'a> {
             ])
             .split(area);
 
-        // File tree with scroll support - use new session-based approach
-        let mut session_clone = self.model.session.clone();
-        let visible_nodes = crate::utils::get_visible_nodes(
-            &self.model.file_tree_nodes,
-            &self.model.search_query,
-            self.model.size_filter,
-            &self.model.token_states,
-            &mut session_clone,
-        );
+        // Rows come from the memoized cache — refreshed by the event loop
+        // before every draw, so no per-frame filter and no session clone.
+        let visible_nodes = &self.model.visible_cache;
         let total_nodes = visible_nodes.len();
 
         // How many selected leaves are actually on screen under the current search.
         let visible_selected = visible_nodes
             .iter()
-            .filter(|d| !d.node.is_directory && d.is_selected)
+            .filter(|r| !r.is_directory && r.is_selected)
             .count();
 
         // Only meaningful while searching — with no query nothing is hidden.
         let search_active = !self.model.search_query.trim().is_empty();
         let hidden_selected = if search_active {
+            // Session clone only on the search path; non-search frames pay nothing.
+            let mut session_clone = self.model.session.clone();
             let total_selected = crate::utils::collect_selected_files_in_tree(
                 &self.model.file_tree_nodes,
-                &mut session_clone, // the clone already made above for get_visible_nodes
+                &mut session_clone,
             )
             .len();
             total_selected.saturating_sub(visible_selected)
@@ -109,9 +105,8 @@ impl<'a> StatefulWidget for FileSelectionWidget<'a> {
             .enumerate()
             .skip(scroll_start)
             .take(content_height)
-            .map(|(i, display_node)| {
-                let node = &display_node.node;
-                let is_selected = display_node.is_selected;
+            .map(|(i, node)| {
+                let is_selected = node.is_selected;
 
                 let indent = "  ".repeat(node.level);
                 let icon = if node.is_directory {
