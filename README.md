@@ -135,7 +135,7 @@ cargo install --path crates/gnaw
 
 ## ⭐ Star Gazing
 
-[![Star History Chart](https://api.star-history.com/svg?repos=gitbadger-clan/gnaw&type=Date)](https://star-history.com/#gitbadger/gnaw&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=gitbadger-clan/gnaw&type=Date)](https://star-history.com/#gitbadger-clan/gnaw&Date)
 
 ## 📊 Benchmarks
 
