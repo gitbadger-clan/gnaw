@@ -14,7 +14,7 @@ default-members = ["crates/gnaw-core", "crates/gnaw-adapters", "crates/gnaw-ctx"
 # Shared package metadata — every crate inherits via `<field>.workspace = true`.
 # Bump the version here and the whole workspace moves in lockstep.
 [workspace.package]
-version = "0.1.1"
+version = "0.1.3"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/gitbadger-clan/gnaw.git"
@@ -37,10 +37,10 @@ codegen-units = 1
 [workspace.dependencies]
 # Internal crates: version requirement lives ONCE here, so consumers can never
 # skew from the published version. Keep these two in step with the version above.
-gnaw-core = { path = "crates/gnaw-core", version = "0.1.1" }
-gnaw-adapters = { path = "crates/gnaw-adapters", version = "0.1.1" }
-gnaw-pipeline = { path = "crates/gnaw-pipeline", version = "0.1.1" }
-gnaw-mcp = { path = "crates/gnaw-mcp", version = "0.1.1" }
+gnaw-core = { path = "crates/gnaw-core", version = "0.1.3" }
+gnaw-adapters = { path = "crates/gnaw-adapters", version = "0.1.3" }
+gnaw-pipeline = { path = "crates/gnaw-pipeline", version = "0.1.3" }
+gnaw-mcp = { path = "crates/gnaw-mcp", version = "0.1.3" }
 
 # External dependencies
 anyhow = "1.0.102"
