@@ -108,9 +108,13 @@ impl TuiApp {
         let mut events = EventStream::new();
 
         loop {
-            // Copy the animation flag out first so the select! guard doesn't
-            // borrow self while the message_rx branch borrows it mutably.
-            let animating = self.model.prompt_output.analysis_in_progress;
+            let counting = self.model.token_states.values().any(|s| {
+                matches!(
+                    s,
+                    crate::model::TokenState::Pending | crate::model::TokenState::Counting
+                )
+            });
+            let animating = self.model.prompt_output.analysis_in_progress || counting;
 
             tokio::select! {
                 // Branch 1: next terminal event. events.next() lives ONLY here,
