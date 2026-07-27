@@ -152,7 +152,7 @@ impl TuiApp {
                         // supersedes a backlog of scrolls instead of waiting
                         // behind it (the "scroll runs on" feel when you stop).
                         let mut pending_scroll: Option<Message> = None;
-                        let mut budget = 64;
+                        let mut budget = 256;
 
                         let feed = |this: &mut Self, msg: Message, pending: &mut Option<Message>| -> Result<()> {
                             match (coalesce_key(&msg), pending.take()) {
