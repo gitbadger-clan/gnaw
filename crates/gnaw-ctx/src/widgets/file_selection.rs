@@ -1,12 +1,12 @@
 //! File selection widget for directory tree navigation and file selection.
 
-use crate::model::DisplayFileNode;
 use crate::model::Model;
 use crate::model::TokenState;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
+use std::path::Path;
 
 /// State for the file selection widget - no longer needed, read directly from Model
 pub type FileSelectionState = ();
@@ -34,16 +34,12 @@ impl<'a> FileSelectionWidget<'a> {
     }
 }
 
-/// True if any loaded descendant is Pending or Counting.
-fn dir_has_pending(node: &DisplayFileNode, model: &crate::model::Model) -> bool {
-    if node.is_directory {
-        node.children.iter().any(|c| dir_has_pending(c, model))
-    } else {
-        matches!(
-            model.token_states.get(&node.path),
-            Some(TokenState::Pending) | Some(TokenState::Counting)
-        )
-    }
+/// True if any counted-or-queued file lives under this path.
+fn path_has_pending(dir: &Path, model: &crate::model::Model) -> bool {
+    model
+        .token_states
+        .iter()
+        .any(|(p, s)| matches!(s, TokenState::Pending | TokenState::Counting) && p.starts_with(dir))
 }
 
 impl<'a> StatefulWidget for FileSelectionWidget<'a> {
@@ -128,7 +124,7 @@ impl<'a> StatefulWidget for FileSelectionWidget<'a> {
                 let token_suffix = if node.is_directory {
                     // While descendants are still counting, the stored agg is stale →
                     // show the spinner. Once quiescent, agg_tokens is fresh and correct.
-                    if dir_has_pending(node, self.model) {
+                    if path_has_pending(&node.path, self.model) {
                         format!("  [{}]", spinner_frame())
                     } else {
                         let total = node.agg_tokens.unwrap_or(0);
